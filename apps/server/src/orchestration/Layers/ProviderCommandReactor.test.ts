@@ -1254,6 +1254,61 @@ describe("ProviderCommandReactor", () => {
     }),
   );
 
+  effectIt.effect(
+    "names a thread with its own provider when the text-generation one can't run",
+    () =>
+      Effect.gen(function* () {
+        const titleGenerated = yield* Deferred.make<void>();
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            threadModelSelection: {
+              instanceId: ProviderInstanceId.make("claudeAgent"),
+              model: "claude-sonnet-5",
+            },
+          }),
+        );
+        // The default text-generation provider (Codex) isn't installed here.
+        harness.generateThreadTitle.mockImplementation((input) =>
+          input.modelSelection.instanceId === "claudeAgent"
+            ? Deferred.succeed(titleGenerated, undefined).pipe(
+                Effect.as({ title: "Add a disabled prop to Button" }),
+              )
+            : Effect.fail(
+                new TextGenerationError({
+                  operation: "generateThreadTitle",
+                  detail: "Failed to spawn Codex CLI process",
+                }),
+              ),
+        );
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-title-fallback"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: MessageId.make("message-turn-start-title-fallback"),
+            role: "user",
+            text: "just make the button disable-able please",
+            attachments: [],
+          },
+          titleSeed: "Thread",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: "2026-01-01T00:00:01.000Z",
+        });
+        yield* Deferred.await(titleGenerated);
+        yield* Effect.promise(() => harness.drain());
+
+        const selections = harness.generateThreadTitle.mock.calls.map(
+          ([input]) => input.modelSelection,
+        );
+        expect(selections.at(-1)).toMatchObject({
+          instanceId: "claudeAgent",
+          model: "claude-haiku-4-5",
+        });
+        expect(selections.some((selection) => selection.instanceId !== "claudeAgent")).toBe(true);
+      }),
+  );
+
   effectIt.effect("rejects /compact without conversation context", () =>
     Effect.gen(function* () {
       const harness = yield* Effect.promise(() => createHarness());
