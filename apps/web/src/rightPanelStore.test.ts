@@ -15,6 +15,9 @@ import {
   useRightPanelStore,
 } from "./rightPanelStore";
 
+/** These tests open ordinary tabs; preview tabs have their own tests. */
+const PINNED = { preview: false } as const;
+
 const refA = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-A"));
 const refB = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-B"));
 
@@ -139,7 +142,11 @@ describe("rightPanelStore", () => {
   );
 
   it.each([
-    { choice: "file", choose: () => useRightPanelStore.getState().openFile(refA, "src/app.ts") },
+    {
+      choice: "file",
+      choose: () =>
+        useRightPanelStore.getState().openFile(refA, "src/app.ts", undefined, undefined, PINNED),
+    },
     {
       choice: "pull request",
       choose: () =>
@@ -185,7 +192,7 @@ describe("rightPanelStore", () => {
   it("allows automatic panels for a later turn after a manual choice", () => {
     const store = useRightPanelStore.getState();
     const firstTurnRevision = store.getUserActionRevision(refA);
-    store.openFile(refA, "src/app.ts");
+    store.openFile(refA, "src/app.ts", undefined, undefined, PINNED);
     expect(store.openProactive(refA, completedDiff, firstTurnRevision)).toBe(false);
 
     const nextTurnRevision = store.getUserActionRevision(refA);
@@ -197,8 +204,8 @@ describe("rightPanelStore", () => {
     const otherEnvironment = scopeThreadRef("env-2" as EnvironmentId, refA.threadId);
     const store = useRightPanelStore.getState();
     const revision = store.getUserActionRevision(refA);
-    store.openFile(refB, "src/app.ts");
-    store.openFile(otherEnvironment, "src/app.ts");
+    store.openFile(refB, "src/app.ts", undefined, undefined, PINNED);
+    store.openFile(otherEnvironment, "src/app.ts", undefined, undefined, PINNED);
 
     expect(store.openProactive(refA, completedDiff, revision)).toBe(true);
     expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refB)).toBe("file");
@@ -209,7 +216,7 @@ describe("rightPanelStore", () => {
 
   it("does not treat resource reconciliation as a manual choice", () => {
     const store = useRightPanelStore.getState();
-    store.openFile(refA, "src/app.ts");
+    store.openFile(refA, "src/app.ts", undefined, undefined, PINNED);
     const revision = store.getUserActionRevision(refA);
     store.reconcileBrowserSurfaces(refA, ["agent-browser"]);
     store.reconcileFileSurfaces(refA, false);
@@ -451,9 +458,9 @@ describe("rightPanelStore", () => {
 
   it("replaces the standalone explorer with peer file surfaces", () => {
     useRightPanelStore.getState().open(refA, "files");
-    useRightPanelStore.getState().openFile(refA, "src/index.ts");
-    useRightPanelStore.getState().openFile(refA, "src/index.ts");
-    useRightPanelStore.getState().openFile(refA, "README.md");
+    useRightPanelStore.getState().openFile(refA, "src/index.ts", undefined, undefined, PINNED);
+    useRightPanelStore.getState().openFile(refA, "src/index.ts", undefined, undefined, PINNED);
+    useRightPanelStore.getState().openFile(refA, "README.md", undefined, undefined, PINNED);
 
     expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
       isOpen: true,
@@ -477,9 +484,46 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("opens files in one preview tab that the next file or diff replaces", () => {
+    const store = useRightPanelStore.getState();
+    store.openFile(refA, "notes.md", undefined, undefined, PINNED);
+    store.openFile(refA, "src/a.ts");
+    store.openFile(refA, "src/b.ts");
+    let state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces).toMatchObject([
+      { id: "file:notes.md" },
+      { id: "file:src/b.ts", preview: true },
+    ]);
+    expect(state.surfaces[0]).not.toHaveProperty("preview");
+
+    store.openFileDiff(refA, "src/c.ts", "working-tree");
+    state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces.map((surface) => surface.id)).toEqual([
+      "file:notes.md",
+      fileDiffSurfaceId("src/c.ts", "working-tree"),
+    ]);
+  });
+
+  it("keeps a preview tab once it is pinned, and never demotes a pinned tab", () => {
+    const store = useRightPanelStore.getState();
+    store.openFile(refA, "src/a.ts");
+    store.pinFileSurface(refA, "file:src/a.ts");
+    store.openFile(refA, "src/a.ts");
+    store.openFile(refA, "src/b.ts");
+    store.openFile(refA, "src/b.ts", undefined, undefined, PINNED);
+    store.openFile(refA, "src/c.ts");
+
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces.map((surface) => [surface.id, "preview" in surface])).toEqual([
+      ["file:src/a.ts", false],
+      ["file:src/b.ts", false],
+      ["file:src/c.ts", true],
+    ]);
+  });
+
   it("opens diffs as one preview tab that the next diff replaces", () => {
     const store = useRightPanelStore.getState();
-    store.openFile(refA, "src/index.ts");
+    store.openFile(refA, "src/index.ts", undefined, undefined, PINNED);
     store.openFileDiff(refA, "src/a.ts", "working-tree");
     store.openFileDiff(refA, "src/b.ts", "staged");
 
@@ -494,9 +538,9 @@ describe("rightPanelStore", () => {
 
   it("moves open tabs along with a renamed file or folder", () => {
     const store = useRightPanelStore.getState();
-    store.openFile(refA, "src/lib/a.ts");
+    store.openFile(refA, "src/lib/a.ts", undefined, undefined, PINNED);
     store.openFileDiff(refA, "src/lib/b.ts", "working-tree");
-    store.openFile(refA, "src/other.ts");
+    store.openFile(refA, "src/other.ts", undefined, undefined, PINNED);
     store.retargetFileSurfaces(refA, { fromPath: "src/lib", toPath: "src/util" });
 
     const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
@@ -513,8 +557,8 @@ describe("rightPanelStore", () => {
     ["notes/meeting ", "notes/meeting"],
     [" notes/meeting", "notes/meeting"],
   ])("keeps %j and %j in separate file tabs", (firstPath, secondPath) => {
-    useRightPanelStore.getState().openFile(refA, firstPath);
-    useRightPanelStore.getState().openFile(refA, secondPath);
+    useRightPanelStore.getState().openFile(refA, firstPath, undefined, undefined, PINNED);
+    useRightPanelStore.getState().openFile(refA, secondPath, undefined, undefined, PINNED);
 
     expect(
       selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces,
@@ -530,8 +574,8 @@ describe("rightPanelStore", () => {
     ["/", "/"],
     ["C:/", "C:/"],
   ])("reuses the folder tab for %j and %j", (linkPath, treePath) => {
-    useRightPanelStore.getState().openFile(refA, linkPath);
-    useRightPanelStore.getState().openFile(refA, treePath);
+    useRightPanelStore.getState().openFile(refA, linkPath, undefined, undefined, PINNED);
+    useRightPanelStore.getState().openFile(refA, treePath, undefined, undefined, PINNED);
 
     expect(
       selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces,
@@ -566,7 +610,9 @@ describe("rightPanelStore", () => {
   });
 
   it("keeps attachment and workspace file ids disjoint", () => {
-    useRightPanelStore.getState().openFile(refA, "attachment:shared-id");
+    useRightPanelStore
+      .getState()
+      .openFile(refA, "attachment:shared-id", undefined, undefined, PINNED);
     useRightPanelStore.getState().openAttachment(refA, {
       type: "file",
       id: "shared-id",
@@ -583,8 +629,8 @@ describe("rightPanelStore", () => {
   });
 
   it("updates line reveal requests when reopening a file surface", () => {
-    useRightPanelStore.getState().openFile(refA, "src/index.ts", 42);
-    useRightPanelStore.getState().openFile(refA, "src/index.ts", 87);
+    useRightPanelStore.getState().openFile(refA, "src/index.ts", 42, undefined, PINNED);
+    useRightPanelStore.getState().openFile(refA, "src/index.ts", 87, undefined, PINNED);
 
     expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
       isOpen: true,
@@ -600,7 +646,7 @@ describe("rightPanelStore", () => {
       ],
     });
 
-    useRightPanelStore.getState().openFile(refA, "src/index.ts");
+    useRightPanelStore.getState().openFile(refA, "src/index.ts", undefined, undefined, PINNED);
 
     expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
       isOpen: true,
@@ -618,9 +664,9 @@ describe("rightPanelStore", () => {
   });
 
   it("removes persisted file surfaces when their workspace no longer exists", () => {
-    useRightPanelStore.getState().openFile(refA, "src/index.ts");
+    useRightPanelStore.getState().openFile(refA, "src/index.ts", undefined, undefined, PINNED);
     useRightPanelStore.getState().open(refA, "agents");
-    useRightPanelStore.getState().openFile(refA, "README.md");
+    useRightPanelStore.getState().openFile(refA, "README.md", undefined, undefined, PINNED);
 
     useRightPanelStore.getState().reconcileFileSurfaces(refA, false);
 
@@ -630,7 +676,7 @@ describe("rightPanelStore", () => {
       surfaces: [{ id: "agents", kind: "agents" }],
     });
 
-    useRightPanelStore.getState().openFile(refB, "conductor.json");
+    useRightPanelStore.getState().openFile(refB, "conductor.json", undefined, undefined, PINNED);
     useRightPanelStore.getState().reconcileFileSurfaces(refB, false);
     expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refB)).toEqual({
       isOpen: false,
@@ -647,7 +693,7 @@ describe("rightPanelStore", () => {
       mimeType: "application/pdf",
       sizeBytes: 42,
     };
-    useRightPanelStore.getState().openFile(refA, "README.md");
+    useRightPanelStore.getState().openFile(refA, "README.md", undefined, undefined, PINNED);
     useRightPanelStore.getState().openAttachment(refA, attachment);
 
     useRightPanelStore.getState().reconcileFileSurfaces(refA, false);
@@ -929,7 +975,7 @@ describe("rightPanelStore", () => {
 
   it("closing other surfaces keeps the selected surface active", () => {
     useRightPanelStore.getState().openBrowser(refA, "tab-a");
-    useRightPanelStore.getState().openFile(refA, "src/index.ts");
+    useRightPanelStore.getState().openFile(refA, "src/index.ts", undefined, undefined, PINNED);
     useRightPanelStore.getState().openTerminal(refA, "term-1");
 
     useRightPanelStore.getState().closeOtherSurfaces(refA, "file:src/index.ts");
@@ -951,7 +997,7 @@ describe("rightPanelStore", () => {
 
   it("closing surfaces to the right activates the selected surface when active was removed", () => {
     useRightPanelStore.getState().openBrowser(refA, "tab-a");
-    useRightPanelStore.getState().openFile(refA, "src/index.ts");
+    useRightPanelStore.getState().openFile(refA, "src/index.ts", undefined, undefined, PINNED);
     useRightPanelStore.getState().openTerminal(refA, "term-1");
 
     useRightPanelStore.getState().closeSurfacesToRight(refA, "browser:tab-a");
@@ -965,7 +1011,7 @@ describe("rightPanelStore", () => {
 
   it("closing all surfaces closes the panel", () => {
     useRightPanelStore.getState().openBrowser(refA, "tab-a");
-    useRightPanelStore.getState().openFile(refA, "src/index.ts");
+    useRightPanelStore.getState().openFile(refA, "src/index.ts", undefined, undefined, PINNED);
 
     useRightPanelStore.getState().closeAllSurfaces(refA);
 

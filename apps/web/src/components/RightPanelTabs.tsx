@@ -76,6 +76,7 @@ import { PreviewPanelShell, type PreviewPanelMode } from "./preview/PreviewPanel
 import { FaviconImage } from "./preview/PreviewFaviconIcon";
 import { previewBridge } from "./preview/previewBridge";
 import { PierreEntryIcon } from "./chat/PierreEntryIcon";
+import { fileTabDescriptions } from "./files/workbench/fileTabDescriptions";
 import { resolvePullRequestState } from "./pullRequest/pullRequestPresentation";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 
@@ -105,6 +106,8 @@ interface RightPanelTabsProps {
   onActivate: (surface: RightPanelSurface) => void;
   onRenameDevice?: (surfaceId: string, title: string) => void;
   onCloseSurface: (surface: RightPanelSurface) => void;
+  /** Keeps a preview file tab open. */
+  onPinSurface?: (surface: RightPanelSurface) => void;
   onCloseOtherSurfaces: (surface: RightPanelSurface) => void;
   onCloseSurfacesToRight: (surface: RightPanelSurface) => void;
   onCloseAllSurfaces: () => void;
@@ -647,6 +650,22 @@ function RightPanelEmptyState(props: {
   );
 }
 
+/** A file tab's full path, and whether the next file will replace it. */
+function FileTabTooltip(props: { surface: Extract<RightPanelSurface, { kind: "file" }> }) {
+  const repo = props.surface.root
+    ?.replace(/[\\/]+$/, "")
+    .split(/[\\/]/)
+    .pop();
+  return (
+    <div className="flex flex-col">
+      <span>{repo ? `${repo}/${props.surface.relativePath}` : props.surface.relativePath}</span>
+      {props.surface.preview ? (
+        <span className="text-muted-foreground">Preview: double-click to keep this tab open</span>
+      ) : null}
+    </div>
+  );
+}
+
 function surfaceTitle(
   surface: RightPanelSurface,
   sessions: Readonly<Record<string, PreviewSessionSnapshot>>,
@@ -875,6 +894,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
   const ownsDesktopTitleBar = isElectron && props.mode === "inline";
   const browserProfiles = useBrowserDefaults().profiles;
   const { resolvedTheme } = useTheme();
+  const fileDescriptions = useMemo(() => fileTabDescriptions(props.surfaces), [props.surfaces]);
   const tabListRef = useRef<HTMLDivElement>(null);
   const [renamingDevice, setRenamingDevice] = useState<string | null>(null);
   const [addSurfaceMenuOpen, setAddSurfaceMenuOpen] = useState(false);
@@ -1283,11 +1303,26 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                             onDoubleClick={() => {
                               if (surface.kind === "device" && props.onRenameDevice)
                                 setRenamingDevice(surface.id);
+                              // As in VS Code, double-clicking a preview tab keeps it.
+                              if (surface.kind === "file" && surface.preview)
+                                props.onPinSurface?.(surface);
                             }}
-                            className="cursor-pointer flex min-w-0 items-center"
+                            className="cursor-pointer flex min-w-0 items-center gap-1"
                             onClick={() => props.onActivate(surface)}
                           >
-                            <span className="truncate">{title}</span>
+                            <span
+                              className={cn(
+                                "truncate",
+                                surface.kind === "file" && surface.preview && "italic",
+                              )}
+                            >
+                              {title}
+                            </span>
+                            {fileDescriptions.has(surface.id) ? (
+                              <span className="min-w-0 shrink-[2] truncate text-muted-foreground/70">
+                                {fileDescriptions.get(surface.id)}
+                              </span>
+                            ) : null}
                           </button>
                         }
                       />
@@ -1298,6 +1333,8 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                             environmentId={props.environmentId}
                             title={title}
                           />
+                        ) : surface.kind === "file" && !surface.attachment ? (
+                          <FileTabTooltip surface={surface} />
                         ) : (
                           title
                         )}

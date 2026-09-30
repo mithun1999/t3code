@@ -70,6 +70,11 @@ export type RightPanelSurface =
        * control does: unstaged ("working-tree") or staged changes.
        */
       compare?: FileSurfaceCompare;
+      /**
+       * VS Code's preview tab: the next file or diff opened takes its place.
+       * Editing it or double-clicking its tab keeps it open.
+       */
+      preview?: true;
     }
   | {
       /**
@@ -141,11 +146,20 @@ interface RightPanelStoreState {
   openDevice: (ref: ScopedThreadRef, target: DeviceTabTarget, automatic?: boolean) => void;
   renameDevice: (ref: ScopedThreadRef, surfaceId: string, title: string) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
-  openFile: (ref: ScopedThreadRef, relativePath: string, line?: number, root?: string) => void;
+  /** Opens a file in the preview tab unless `preview` is false. */
+  openFile: (
+    ref: ScopedThreadRef,
+    relativePath: string,
+    line?: number,
+    root?: string,
+    options?: { readonly preview?: boolean },
+  ) => void;
+  /** Keeps a preview tab open: it becomes an ordinary tab. */
+  pinFileSurface: (ref: ScopedThreadRef, surfaceId: string) => void;
   openAttachment: (ref: ScopedThreadRef, attachment: ChatFileAttachment) => void;
   /**
-   * Opens a file's git changes. Like VS Code's preview editors, it takes the
-   * place of the diff opened before it, so stepping through changes keeps one tab.
+   * Opens a file's git changes in the preview tab, so stepping through
+   * changes keeps one tab, as in VS Code.
    */
   openFileDiff: (
     ref: ScopedThreadRef,
@@ -248,7 +262,7 @@ const fileSurface = (
   revealLine: number | null,
   revealRequestId: number,
   root?: string,
-): RightPanelSurface => ({
+): Extract<RightPanelSurface, { kind: "file" }> => ({
   id: fileSurfaceId(relativePath, root),
   kind: "file",
   relativePath,
@@ -256,6 +270,31 @@ const fileSurface = (
   revealLine,
   revealRequestId,
 });
+
+/**
+ * Puts a file or diff tab in the list the way VS Code's editor tabs behave:
+ * one already open is updated in place (and pinned when asked to be), and a
+ * new preview takes the place of the current preview tab.
+ */
+export function placeFileSurface(
+  surfaces: ReadonlyArray<RightPanelSurface>,
+  surface: Extract<RightPanelSurface, { kind: "file" }>,
+  preview: boolean,
+): RightPanelSurface[] {
+  const existing = surfaces.find((entry) => entry.id === surface.id);
+  if (existing) {
+    const stillPreview = preview && existing.kind === "file" && existing.preview === true;
+    const next = { ...surface, ...(stillPreview ? { preview: true as const } : {}) };
+    if (!stillPreview) delete next.preview;
+    return surfaces.map((entry) => (entry.id === surface.id ? next : entry));
+  }
+  if (!preview) return [...surfaces, surface];
+  const previewSurface = { ...surface, preview: true as const };
+  const previewIndex = surfaces.findIndex((entry) => entry.kind === "file" && entry.preview);
+  return previewIndex >= 0
+    ? surfaces.map((entry, index) => (index === previewIndex ? previewSurface : entry))
+    : [...surfaces, previewSurface];
+}
 
 const attachmentSurface = (attachment: ChatFileAttachment): RightPanelSurface => ({
   id: `attachment:${attachment.id}`,
@@ -607,7 +646,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
       openFileDiff: (ref, relativePath, compare, root) =>
         set((state) =>
           userAction(state, scopedThreadKey(ref), (current) => {
-            const surface: RightPanelSurface = {
+            const surface: Extract<RightPanelSurface, { kind: "file" }> = {
               id: fileDiffSurfaceId(relativePath, compare, root),
               kind: "file",
               relativePath,
@@ -616,22 +655,15 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               revealRequestId: 0,
               compare,
             };
-            const surfaces = current.surfaces.filter((entry) => entry.kind !== "files");
-            const existingIndex = surfaces.findIndex((entry) => entry.id === surface.id);
-            if (existingIndex >= 0) {
-              return { isOpen: true, activeSurfaceId: surface.id, surfaces };
-            }
-            // Replace the diff that is showing, if any, in its place.
-            const active = surfaces.find((entry) => entry.id === current.activeSurfaceId);
-            const previewIndex =
-              active?.kind === "file" && active.compare
-                ? surfaces.indexOf(active)
-                : surfaces.findLastIndex((entry) => entry.kind === "file" && entry.compare);
-            const next =
-              previewIndex >= 0
-                ? surfaces.map((entry, index) => (index === previewIndex ? surface : entry))
-                : [...surfaces, surface];
-            return { isOpen: true, activeSurfaceId: surface.id, surfaces: next };
+            return {
+              isOpen: true,
+              activeSurfaceId: surface.id,
+              surfaces: placeFileSurface(
+                current.surfaces.filter((entry) => entry.kind !== "files"),
+                surface,
+                true,
+              ),
+            };
           }),
         ),
       retargetFileSurfaces: (ref, move) =>
@@ -677,7 +709,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               : next;
           }),
         ),
-      openFile: (ref, requestedPath, line, root) =>
+      openFile: (ref, requestedPath, line, root, options) =>
         set((state) =>
           userAction(state, scopedThreadKey(ref), (current) => {
             // Workspace entry paths use '/', including on Windows.
@@ -703,14 +735,33 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             return {
               isOpen: true,
               activeSurfaceId: surface.id,
-              surfaces: existing
-                ? withoutStandaloneExplorer.map((entry) =>
-                    entry.id === surface.id ? surface : entry,
-                  )
-                : [...withoutStandaloneExplorer, surface],
+              surfaces: placeFileSurface(
+                withoutStandaloneExplorer,
+                surface,
+                options?.preview ?? true,
+              ),
             };
           }),
         ),
+      pinFileSurface: (ref, surfaceId) =>
+        set((state) => {
+          const threadKey = scopedThreadKey(ref);
+          const current = state.byThreadKey[threadKey];
+          const target = current?.surfaces.find((surface) => surface.id === surfaceId);
+          if (!current || target?.kind !== "file" || !target.preview) return state;
+          const { preview: _preview, ...pinned } = target;
+          return {
+            byThreadKey: {
+              ...state.byThreadKey,
+              [threadKey]: {
+                ...current,
+                surfaces: current.surfaces.map((surface) =>
+                  surface.id === surfaceId ? pinned : surface,
+                ),
+              },
+            },
+          };
+        }),
       openAttachment: (ref, attachment) =>
         set((state) =>
           userAction(state, scopedThreadKey(ref), (current) => {

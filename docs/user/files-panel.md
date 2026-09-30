@@ -8,6 +8,14 @@ While the panel has the keyboard, VS Code's view keys work: ⌘B hides or shows
 the side bar, ⇧⌘E shows the Explorer and ⌃⇧G shows Source Control. Elsewhere
 those keys keep their usual meaning (⌘B still toggles the thread sidebar).
 
+## Tabs
+
+Files open in a preview tab, shown in italics, as in VS Code: the next file or
+diff you open takes its place, so browsing doesn't pile up tabs. Editing the
+file, double-clicking its tab, or double-clicking it in the explorer keeps the
+tab open. When two tabs share a name, each shows the repo or folder it comes
+from, such as `hello.py repo-a`.
+
 ## Explorer
 
 The explorer lists your workspace. In a multi-repo workspace each repository is
@@ -45,6 +53,10 @@ The Source Control view lists each repository's changes in VS Code's groups:
   has **Commit (Amend)**, **Stage All Changes** and **Unstage All Changes**.
 - Discarding a new file moves it to the Trash. Discarding edits to a tracked
   file can't be undone.
+
+"Open diff" in the chat, for the latest turn, opens here when those changes
+are still uncommitted, so you can review, stage and commit them in one place.
+Earlier turns open the turn diff, which shows exactly what that turn changed.
 
 ### The diff editor
 
