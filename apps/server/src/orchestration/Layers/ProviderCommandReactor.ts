@@ -11,6 +11,7 @@ import {
   ThreadId,
   type ProviderSession,
   type RuntimeMode,
+  type ServerSettings,
   type TurnId,
 } from "@t3tools/contracts";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
@@ -69,6 +70,7 @@ import {
   ServerSettingsService,
 } from "../../serverSettings.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import { textGenerationSelectionForInstance } from "@t3tools/shared/serverSettings";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import * as TerminalManager from "../../terminal/Manager.ts";
@@ -1027,6 +1029,34 @@ const make = Effect.gen(function* () {
     );
   });
 
+  /**
+   * Names a thread with the configured text-generation model, falling back to
+   * the thread's own provider (its light model) when that one can't run, e.g.
+   * the default Codex CLI isn't installed.
+   */
+  const generateThreadTitleWithFallback = Effect.fn("generateThreadTitleWithFallback")(function* (
+    input: Omit<Parameters<typeof textGeneration.generateThreadTitle>[0], "modelSelection">,
+    settings: ServerSettings,
+    threadModelSelection: ModelSelection | undefined,
+  ) {
+    const primary = settings.textGenerationModelSelection;
+    const generate = (modelSelection: ModelSelection) =>
+      textGeneration.generateThreadTitle({ ...input, modelSelection });
+    if (!threadModelSelection || threadModelSelection.instanceId === primary.instanceId) {
+      return yield* generate(primary);
+    }
+    const fallback = textGenerationSelectionForInstance(settings, threadModelSelection);
+    return yield* generate(primary).pipe(
+      Effect.catchTag("TextGenerationError", (error) =>
+        Effect.logInfo("thread title generation falling back to the thread's provider", {
+          configuredInstanceId: primary.instanceId,
+          fallbackInstanceId: fallback.instanceId,
+          detail: error.message,
+        }).pipe(Effect.andThen(generate(fallback))),
+      ),
+    );
+  });
+
   const maybeGenerateThreadTitleForFirstTurn = Effect.fn("maybeGenerateThreadTitleForFirstTurn")(
     function* (input: {
       readonly threadId: ThreadId;
@@ -1039,23 +1069,23 @@ const make = Effect.gen(function* () {
     }) {
       const attachments = input.attachments ?? [];
       yield* Effect.gen(function* () {
-        const { textGenerationModelSelection: modelSelection } = yield* projectSettingsForThread(
-          input.threadId,
-        );
+        const settings = yield* projectSettingsForThread(input.threadId);
+        const threadShell = yield* resolveThreadShell(input.threadId);
 
-        const generated = yield* textGeneration
-          .generateThreadTitle({
+        const generated = yield* generateThreadTitleWithFallback(
+          {
             cwd: input.cwd,
             message: input.messageText,
             ...(attachments.length > 0 ? { attachments } : {}),
-            modelSelection,
-          })
-          .pipe(
-            Effect.retry({
-              times: 2,
-              schedule: Schedule.exponential("2 seconds"),
-            }),
-          );
+          },
+          settings,
+          threadShell?.modelSelection,
+        ).pipe(
+          Effect.retry({
+            times: 2,
+            schedule: Schedule.exponential("2 seconds"),
+          }),
+        );
         if (!generated) return;
 
         const thread = yield* resolveThreadShell(input.threadId);
@@ -1137,17 +1167,20 @@ const make = Effect.gen(function* () {
         thread,
         projects: project ? [project] : [],
       }) ?? process.cwd();
-    const { textGenerationModelSelection: modelSelection } = resolveProjectSettings(
+    const settings = resolveProjectSettings(
       yield* serverSettingsService.getSettings,
       thread.projectId,
     ).settings;
-    const generated = yield* textGeneration.generateThreadTitle({
-      cwd,
-      message,
-      previousTitle,
-      ...(attachments.length > 0 ? { attachments } : {}),
-      modelSelection,
-    });
+    const generated = yield* generateThreadTitleWithFallback(
+      {
+        cwd,
+        message,
+        previousTitle,
+        ...(attachments.length > 0 ? { attachments } : {}),
+      },
+      settings,
+      thread.modelSelection,
+    );
     if (generated.title === DEFAULT_THREAD_TITLE || generated.title === previousTitle) {
       return { _tag: "Completed", title: undefined } as const;
     }

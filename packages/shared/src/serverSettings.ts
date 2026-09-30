@@ -1,4 +1,5 @@
 import {
+  DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   isProviderDriverKind,
   isProviderAvailable,
   resolveProviderInstanceEnabled,
@@ -79,6 +80,23 @@ export function isModelSelectionProviderEnabled(
     isProviderDriverKind(selection.instanceId) &&
     getLegacyProviderSettings(settings, selection.instanceId)?.enabled === true
   );
+}
+
+/**
+ * The light text-generation model on a selection's provider instance (e.g.
+ * Claude's Haiku), for titles when the configured text-generation provider
+ * can't run. Keeps the selection's own model when the provider has no default.
+ */
+export function textGenerationSelectionForInstance(
+  settings: ServerSettings,
+  selection: ModelSelection,
+): ModelSelection {
+  const instanceId = selection.instanceId;
+  const driver =
+    settings.providerInstances[instanceId]?.driver ??
+    (isProviderDriverKind(instanceId) ? instanceId : undefined);
+  const model = driver ? DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[driver] : undefined;
+  return createModelSelection(instanceId, model ?? selection.model);
 }
 
 export function resolveSourceControlWriterModelSelection(
