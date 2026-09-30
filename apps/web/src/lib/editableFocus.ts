@@ -25,3 +25,8 @@ export function isEditableFocused(target: EventTarget | null = document.activeEl
 export function isCodeEditorFocused(target: EventTarget | null = document.activeElement): boolean {
   return target instanceof Element && target.closest(".monaco-editor") !== null;
 }
+
+/** Whether focus is inside the Files panel: its explorer, source control, or editor. */
+export function isFilesPanelFocused(target: EventTarget | null = document.activeElement): boolean {
+  return target instanceof Element && target.closest("[data-file-workbench]") !== null;
+}

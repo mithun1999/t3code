@@ -9,7 +9,7 @@ import {
   type ThreadJumpKeybindingCommand,
 } from "@t3tools/contracts";
 import { isElectron } from "./env";
-import { isCodeEditorFocused } from "./lib/editableFocus";
+import { isCodeEditorFocused, isFilesPanelFocused } from "./lib/editableFocus";
 import { isMacPlatform } from "./lib/utils";
 
 export interface ShortcutEventLike {
@@ -42,6 +42,8 @@ export interface ShortcutMatchContext {
   editableFocus?: boolean;
   /** A code editor owns the keyboard; chords VS Code's editor uses yield to it. */
   codeEditorFocus?: boolean;
+  /** Focus is inside the Files panel, where VS Code's view keys apply. */
+  filesPanelFocus?: boolean;
   [key: string]: boolean;
 }
 
@@ -157,6 +159,7 @@ function resolveContext(options: ShortcutMatchOptions | undefined): ShortcutMatc
     isDesktop: isElectron,
     editableFocus: false,
     codeEditorFocus: typeof document === "undefined" ? false : isCodeEditorFocused(),
+    filesPanelFocus: typeof document === "undefined" ? false : isFilesPanelFocused(),
     ...options?.context,
   };
 }

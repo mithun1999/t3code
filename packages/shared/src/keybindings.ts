@@ -78,6 +78,11 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+s", command: "thread.settle", when: "!terminalFocus" },
   { key: "mod+shift+p", command: "thread.pin", when: "!terminalFocus && !codeEditorFocus" },
   { key: "mod+z", command: "thread.undo", when: "!terminalFocus && !editableFocus" },
+  // VS Code's view keys, inside the Files panel only. Listed after them so they win
+  // over the app's rules on the same keys (⌘B sidebar, ⇧⌘E effort).
+  { key: "mod+b", command: "files.toggleSideBar", when: "filesPanelFocus" },
+  { key: "mod+shift+e", command: "files.showExplorer", when: "filesPanelFocus" },
+  { key: "ctrl+shift+g", command: "files.showSourceControl", when: "filesPanelFocus" },
   ...THREAD_JUMP_KEYBINDING_COMMANDS.map((command, index) => ({
     key: `mod+${index + 1}`,
     command,
