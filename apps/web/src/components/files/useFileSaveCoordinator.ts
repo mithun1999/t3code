@@ -26,12 +26,13 @@ export function useFileSaveCoordinator({
   relativePath,
   root,
   onPendingChange,
-}: FileSaveOptions): Pick<FileSaveCoordinator, "change"> {
+}: FileSaveOptions): Pick<FileSaveCoordinator, "change" | "flush"> {
   const writeFile = useAtomCommand(projectEnvironment.writeFile);
   const session = useMemo(() => {
     const coordinatorRef = createRef<FileSaveCoordinator>();
     return {
       change: (contents: string) => coordinatorRef.current?.change(contents),
+      flush: () => coordinatorRef.current?.flush(),
       setup: () => {
         const coordinator = new FileSaveCoordinator({
           debounceMs: FILE_SAVE_DEBOUNCE_MS,

@@ -23,6 +23,7 @@ import {
   DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE,
   DEFAULT_UNIFIED_SETTINGS,
   type ChatWidth,
+  type CodeEditorEngine,
   type DiffLayout,
   type EnvironmentIdentificationMode,
   MAX_APPEARANCE_CONTRAST,
@@ -207,6 +208,11 @@ const CHAT_WIDTH_LABELS: Record<ChatWidth, string> = {
 const DIFF_LAYOUT_LABELS: Record<DiffLayout, string> = {
   stacked: "Stacked",
   split: "Split",
+};
+
+const CODE_EDITOR_LABELS: Record<CodeEditorEngine, string> = {
+  monaco: "VS Code (Monaco)",
+  classic: "Classic",
 };
 
 const QUIT_CONFIRMATION_MODE_LABELS: Record<QuitConfirmationMode, string> = {
@@ -579,6 +585,7 @@ export function useSettingsRestore(onRestored?: () => void) {
         ? ["Diff whitespace changes"]
         : []),
       ...(settings.diffLayout !== DEFAULT_UNIFIED_SETTINGS.diffLayout ? ["Diff layout"] : []),
+      ...(settings.codeEditor !== DEFAULT_UNIFIED_SETTINGS.codeEditor ? ["Code editor"] : []),
       ...(settings.proactivePanelsEnabled !== DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled
         ? ["Proactive panels"]
         : []),
@@ -665,6 +672,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.diffFilesCollapsed,
       settings.diffIgnoreWhitespace,
       settings.diffLayout,
+      settings.codeEditor,
       settings.proactivePanelsEnabled,
       settings.environmentIdentificationMode,
       settings.contextWindowMeterEnabled,
@@ -769,6 +777,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       diffFilesCollapsed: DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
       diffLayout: DEFAULT_UNIFIED_SETTINGS.diffLayout,
+      codeEditor: DEFAULT_UNIFIED_SETTINGS.codeEditor,
       proactivePanelsEnabled: DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled,
       showSkillsInSlashMenu: DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu,
       composerCollapseOnScroll: DEFAULT_UNIFIED_SETTINGS.composerCollapseOnScroll,
@@ -2571,6 +2580,40 @@ export function GeneralSettingsPanel() {
                 </SelectItem>
                 <SelectItem hideIndicator value="split">
                   {DIFF_LAYOUT_LABELS.split}
+                </SelectItem>
+              </SelectPopup>
+            </Select>
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("code-editor")}
+          description="Edit files with VS Code's editor, or the lighter classic editor."
+          resetAction={
+            settings.codeEditor !== DEFAULT_UNIFIED_SETTINGS.codeEditor ? (
+              <SettingResetButton
+                label="code editor"
+                onClick={() => updateSettings({ codeEditor: DEFAULT_UNIFIED_SETTINGS.codeEditor })}
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.codeEditor}
+              onValueChange={(value) => {
+                if (value === "monaco" || value === "classic") {
+                  updateSettings({ codeEditor: value });
+                }
+              }}
+            >
+              <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Code editor">
+                <SelectValue>{CODE_EDITOR_LABELS[settings.codeEditor]}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="monaco">
+                  {CODE_EDITOR_LABELS.monaco}
+                </SelectItem>
+                <SelectItem hideIndicator value="classic">
+                  {CODE_EDITOR_LABELS.classic}
                 </SelectItem>
               </SelectPopup>
             </Select>

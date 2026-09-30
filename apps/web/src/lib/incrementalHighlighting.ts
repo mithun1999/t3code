@@ -2,7 +2,9 @@ import type { DiffsHighlighter } from "@pierre/diffs";
 
 import type { DiffThemeName } from "./diffRendering";
 
-function codeChildren(root: ReturnType<DiffsHighlighter["codeToHast"]>) {
+type HighlightedRoot = ReturnType<DiffsHighlighter["codeToHast"]>;
+
+function codeChildren(root: HighlightedRoot) {
   const pre = root.children.find((node) => node.type === "element" && node.tagName === "pre");
   if (pre?.type !== "element") throw new Error("Missing highlighted pre element");
   const code = pre.children.find((node) => node.type === "element" && node.tagName === "code");
@@ -18,7 +20,7 @@ export function createIncrementalHighlightedDocument(
   highlighter: DiffsHighlighter,
   language: string,
   theme: DiffThemeName,
-) {
+): (code: string) => HighlightedRoot {
   const options = { lang: language, theme };
   const newline = { type: "text" as const, value: "\n" };
   let cached:
