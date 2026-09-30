@@ -2651,6 +2651,9 @@ const make = Effect.gen(function* () {
       assistantMessageId: MessageId.make(
         `assistant:${event.itemId ?? event.turnId ?? event.eventId}`,
       ),
+      ...(turn.value.pendingMessageId !== null
+        ? { userMessageId: turn.value.pendingMessageId }
+        : {}),
       checkpointTurnCount: maxCheckpointTurnCount(checkpointContext.checkpoints) + 1,
       createdAt: now,
     });

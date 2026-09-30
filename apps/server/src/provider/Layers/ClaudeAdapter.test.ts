@@ -10,6 +10,7 @@ import type {
   Options as ClaudeQueryOptions,
   PermissionMode,
   PermissionResult,
+  RewindFilesResult,
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -50,7 +51,11 @@ import {
 import { ProviderAdapterProcessError, ProviderAdapterValidationError } from "../Errors.ts";
 import type { ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import type { ClaudeScopedLimitNames } from "./claudeUsageLimits.ts";
-import { makeClaudeAdapter, type ClaudeAdapterLiveOptions } from "./ClaudeAdapter.ts";
+import {
+  makeClaudeAdapter,
+  planClaudeFileRewind,
+  type ClaudeAdapterLiveOptions,
+} from "./ClaudeAdapter.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 const encodeUnknownJsonString = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
@@ -75,6 +80,11 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   public closeError: unknown | undefined;
   /** Set by tests that exercise Claude's graceful interrupt. */
   public interrupt?: () => Promise<unknown>;
+  public readonly rewindFilesCalls: Array<{ userMessageId: string; dryRun: boolean }> = [];
+  public rewindFilesResult = (_userMessageId: string, dryRun: boolean): RewindFilesResult =>
+    dryRun
+      ? { canRewind: true, filesChanged: ["/repo/a.ts"], insertions: 1, deletions: 1 }
+      : { canRewind: true, skippedLinks: 0 };
 
   emit(message: SDKMessage): void {
     if (this.done) {
@@ -120,6 +130,15 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
 
   readonly setMaxThinkingTokens = async (maxThinkingTokens: number | null): Promise<void> => {
     this.setMaxThinkingTokensCalls.push(maxThinkingTokens);
+  };
+
+  readonly rewindFiles = async (
+    userMessageId: string,
+    options?: { dryRun?: boolean },
+  ): Promise<RewindFilesResult> => {
+    const dryRun = options?.dryRun === true;
+    this.rewindFilesCalls.push({ userMessageId, dryRun });
+    return this.rewindFilesResult(userMessageId, dryRun);
   };
 
   readonly close = (): void => {
@@ -341,11 +360,19 @@ function claudeHistoryMessage(input: {
   };
 }
 
+// Rollback tests check the conversation cursor; file checkpoints have their own tests.
+const withoutTurnCheckpoints = (cursor: unknown) => {
+  if (!cursor || typeof cursor !== "object") return cursor;
+  const { turnCheckpoints: _turnCheckpoints, ...rest } = cursor as Record<string, unknown>;
+  return rest;
+};
+
 const sendCompletedClaudeTurn = (
   adapter: ClaudeAdapterShape,
   harness: ReturnType<typeof makeHarness>,
   threadId: ThreadId,
   input: string,
+  sessionId = CLAUDE_ORIGINAL_SESSION_ID,
 ) =>
   Effect.gen(function* () {
     const turn = yield* adapter.sendTurn({
@@ -362,7 +389,7 @@ const sendCompletedClaudeTurn = (
       subtype: "success",
       is_error: false,
       errors: [],
-      session_id: CLAUDE_ORIGINAL_SESSION_ID,
+      session_id: sessionId,
       uuid: `result-${turn.turnId}`,
     } as unknown as SDKMessage);
     const completed = yield* Fiber.join(completedFiber);
@@ -6778,7 +6805,7 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(forkOptions?.resume, "550e8400-e29b-41d4-a716-446655440020");
       assert.equal(forkOptions?.resumeSessionAt, undefined);
       assert.equal(forkOptions?.forkSession, undefined);
-      assert.deepEqual((yield* adapter.listSessions())[0]?.resumeCursor, {
+      assert.deepEqual(withoutTurnCheckpoints((yield* adapter.listSessions())[0]?.resumeCursor), {
         threadId: session.threadId,
         resume: "550e8400-e29b-41d4-a716-446655440020",
         turnCount: 1,
@@ -6903,7 +6930,7 @@ describe("ClaudeAdapterLive", () => {
       assert.deepEqual(forkCalls, [
         [CLAUDE_ORIGINAL_SESSION_ID, { upToMessageId: "compact-boundary" }],
       ]);
-      assert.deepEqual((yield* adapter.listSessions())[0]?.resumeCursor, {
+      assert.deepEqual(withoutTurnCheckpoints((yield* adapter.listSessions())[0]?.resumeCursor), {
         threadId: session.threadId,
         resume: CLAUDE_FORK_SESSION_ID,
         turnCount: 1,
@@ -6962,7 +6989,7 @@ describe("ClaudeAdapterLive", () => {
         .turnId;
 
       yield* adapter.rollbackThread(session.threadId, 1);
-      assert.deepEqual((yield* adapter.listSessions())[0]?.resumeCursor, {
+      assert.deepEqual(withoutTurnCheckpoints((yield* adapter.listSessions())[0]?.resumeCursor), {
         threadId: session.threadId,
         resume: CLAUDE_FORK_SESSION_ID,
         turnCount: 1,
@@ -7027,7 +7054,7 @@ describe("ClaudeAdapterLive", () => {
         .turnId;
 
       yield* adapter.rollbackThread(session.threadId, 1);
-      assert.deepEqual((yield* adapter.listSessions())[0]?.resumeCursor, {
+      assert.deepEqual(withoutTurnCheckpoints((yield* adapter.listSessions())[0]?.resumeCursor), {
         threadId: session.threadId,
         resume: CLAUDE_FORK_SESSION_ID,
         turnCount: 1,
@@ -7117,7 +7144,7 @@ describe("ClaudeAdapterLive", () => {
       assert.deepEqual(forkCalls, [
         [CLAUDE_ORIGINAL_SESSION_ID, { upToMessageId: "assistant-1-final" }],
       ]);
-      assert.deepEqual((yield* adapter.listSessions())[0]?.resumeCursor, {
+      assert.deepEqual(withoutTurnCheckpoints((yield* adapter.listSessions())[0]?.resumeCursor), {
         threadId: session.threadId,
         resume: CLAUDE_FORK_SESSION_ID,
         turnCount: 1,
@@ -7178,7 +7205,7 @@ describe("ClaudeAdapterLive", () => {
 
       const snapshot = yield* adapter.rollbackThread(session.threadId, 2);
       assert.equal(snapshot.turns.length, 1);
-      assert.deepEqual((yield* adapter.listSessions())[0]?.resumeCursor, {
+      assert.deepEqual(withoutTurnCheckpoints((yield* adapter.listSessions())[0]?.resumeCursor), {
         threadId: session.threadId,
         resume: CLAUDE_FORK_SESSION_ID,
         turnCount: 1,
@@ -7255,7 +7282,7 @@ describe("ClaudeAdapterLive", () => {
 
       const snapshot = yield* adapter.rollbackThread(session.threadId, 1);
       assert.equal(snapshot.turns.length, 2);
-      assert.deepEqual((yield* adapter.listSessions())[0]?.resumeCursor, {
+      assert.deepEqual(withoutTurnCheckpoints((yield* adapter.listSessions())[0]?.resumeCursor), {
         threadId: session.threadId,
         resume: CLAUDE_FORK_SESSION_ID,
         turnCount: 2,
@@ -7265,6 +7292,143 @@ describe("ClaudeAdapterLive", () => {
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
     );
+  });
+
+  describe("prompts stopped before Claude read them", () => {
+    const history = (turnIds: ReadonlyArray<string>, sessionId?: string) =>
+      turnIds.flatMap((turnId, index) => [
+        claudeHistoryMessage({
+          type: "user",
+          uuid: sessionId ? `fork-${turnId}` : turnId,
+          content: `turn ${index}`,
+          ...(sessionId ? { sessionId } : {}),
+        }),
+        claudeHistoryMessage({
+          type: "assistant",
+          uuid: `${sessionId ? "fork-" : ""}assistant-${index}`,
+          ...(sessionId ? { sessionId } : {}),
+        }),
+      ]);
+    const runThreeTurns = (
+      delivered: (turnIds: ReadonlyArray<string>) => ReadonlyArray<string>,
+      numTurns: number,
+      verify: (input: {
+        readonly turnIds: ReadonlyArray<string>;
+        readonly forkCalls: number;
+        readonly cursor: unknown;
+      }) => void,
+    ) => {
+      const turnIds: Array<string> = [];
+      let forkCalls = 0;
+      const harness = makeHarness({
+        forkSession: async () => {
+          forkCalls += 1;
+          return { sessionId: CLAUDE_FORK_SESSION_ID };
+        },
+        getSessionMessages: async (sessionId) => {
+          const kept = delivered(turnIds);
+          return sessionId === CLAUDE_FORK_SESSION_ID
+            ? history(kept.slice(0, 1), sessionId)
+            : history(kept);
+        },
+      });
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+        });
+        for (const input of ["first", "second", "third"]) {
+          turnIds.push(
+            (yield* sendCompletedClaudeTurn(adapter, harness, session.threadId, input)).turnId,
+          );
+        }
+        yield* adapter.rollbackThread(session.threadId, numTurns);
+        verify({
+          turnIds,
+          forkCalls,
+          cursor: withoutTurnCheckpoints((yield* adapter.listSessions())[0]?.resumeCursor),
+        });
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    };
+
+    it.effect("drops a removed turn Claude never read without forking", () =>
+      runThreeTurns(
+        (turnIds) => turnIds.slice(0, 2),
+        1,
+        ({ turnIds, forkCalls, cursor }) => {
+          assert.equal(forkCalls, 0);
+          assert.deepEqual(cursor, {
+            threadId: THREAD_ID,
+            resume: CLAUDE_ORIGINAL_SESSION_ID,
+            turnCount: 2,
+            turnStartMessageIds: turnIds.slice(0, 2),
+          });
+        },
+      ),
+    );
+
+    it.effect("forks before the first removed turn Claude read", () =>
+      runThreeTurns(
+        (turnIds) => [turnIds[0]!, turnIds[2]!],
+        2,
+        ({ turnIds, forkCalls, cursor }) => {
+          assert.equal(forkCalls, 1);
+          assert.deepEqual(cursor, {
+            threadId: THREAD_ID,
+            resume: CLAUDE_FORK_SESSION_ID,
+            turnCount: 1,
+            turnStartMessageIds: [`fork-${turnIds[0]}`],
+          });
+        },
+      ),
+    );
+
+    it.effect("keeps a retained turn Claude never read", () =>
+      runThreeTurns(
+        (turnIds) => [turnIds[0]!, turnIds[2]!],
+        1,
+        ({ turnIds, forkCalls, cursor }) => {
+          assert.equal(forkCalls, 1);
+          assert.deepEqual(cursor, {
+            threadId: THREAD_ID,
+            resume: CLAUDE_FORK_SESSION_ID,
+            turnCount: 2,
+            turnStartMessageIds: [`fork-${turnIds[0]}`, turnIds[1]],
+          });
+        },
+      ),
+    );
+
+    it.effect("still refuses when compaction removed the target turn", () => {
+      const turnIds: Array<string> = [];
+      const harness = makeHarness({
+        forkSession: async () => ({ sessionId: CLAUDE_FORK_SESSION_ID }),
+        getSessionMessages: async () => history(turnIds.slice(2)),
+      });
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+        });
+        for (const input of ["first", "second", "third"]) {
+          turnIds.push(
+            (yield* sendCompletedClaudeTurn(adapter, harness, session.threadId, input)).turnId,
+          );
+        }
+        const error = yield* adapter.rollbackThread(session.threadId, 2).pipe(Effect.flip);
+        assert.include(error.message, "turn boundary is unavailable");
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    });
   });
 
   it.effect("resets a Claude thread when rewind removes every recorded turn", () => {
@@ -8387,6 +8551,204 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(
         nativeThreadIds.every((threadId) => threadId === String(THREAD_ID)),
         true,
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+});
+
+describe("ClaudeAdapter file rewind", () => {
+  const ORIGINAL = CLAUDE_ORIGINAL_SESSION_ID;
+  const FORK = CLAUDE_FORK_SESSION_ID;
+  const startResumed = (adapter: ClaudeAdapterShape, resumeCursor?: Record<string, unknown>) =>
+    adapter.startSession({
+      threadId: THREAD_ID,
+      provider: ProviderDriverKind.make("claudeAgent"),
+      runtimeMode: "full-access",
+      resumeCursor: resumeCursor ?? { threadId: THREAD_ID, resume: ORIGINAL },
+    });
+
+  it("plans newer sessions first, each to its own first turn", () => {
+    const at = (sessionId: string, messageId: string) => ({ sessionId, messageId });
+    assert.deepEqual(planClaudeFileRewind([at(ORIGINAL, "t1"), at(ORIGINAL, "t2")]), [
+      at(ORIGINAL, "t1"),
+    ]);
+    assert.deepEqual(
+      planClaudeFileRewind([at(ORIGINAL, "t1"), null, at(FORK, "t3"), at(FORK, "t4")]),
+      [at(FORK, "t3"), at(ORIGINAL, "t1")],
+    );
+    assert.equal(planClaudeFileRewind([null, at(ORIGINAL, "t2")]), undefined);
+    assert.equal(planClaudeFileRewind([]), undefined);
+  });
+
+  it.effect("checkpoints files and restores them to before the chosen turn", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* startResumed(adapter);
+      assert.equal(harness.getLastCreateQueryInput()?.options.enableFileCheckpointing, true);
+      const first = yield* sendCompletedClaudeTurn(adapter, harness, session.threadId, "first");
+      const second = yield* sendCompletedClaudeTurn(adapter, harness, session.threadId, "second");
+
+      const preview = yield* adapter.rewindFiles!(session.threadId, { numTurns: 2, dryRun: true });
+      assert.deepEqual(preview, {
+        canRewind: true,
+        filesChanged: ["/repo/a.ts"],
+        insertions: 1,
+        deletions: 1,
+      });
+      const restored = yield* adapter.rewindFiles!(session.threadId, { numTurns: 1 });
+      assert.equal(restored.canRewind, true);
+      assert.deepEqual(harness.query.rewindFilesCalls, [
+        { userMessageId: String(first.turnId), dryRun: true },
+        { userMessageId: String(second.turnId), dryRun: true },
+        { userMessageId: String(second.turnId), dryRun: false },
+      ]);
+      const cursor = (yield* adapter.listSessions())[0]?.resumeCursor as {
+        turnCheckpoints?: unknown;
+      };
+      assert.deepEqual(cursor.turnCheckpoints, [
+        { sessionId: ORIGINAL, messageId: String(first.turnId) },
+        { sessionId: ORIGINAL, messageId: String(second.turnId) },
+      ]);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("has nothing to restore after the last turn", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* startResumed(adapter);
+      yield* sendCompletedClaudeTurn(adapter, harness, session.threadId, "first");
+      const result = yield* adapter.rewindFiles!(session.threadId, { numTurns: 0 });
+      assert.deepEqual(result, { canRewind: true, filesChanged: [] });
+      assert.deepEqual(harness.query.rewindFilesCalls, []);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("refuses turns recorded before checkpoints existed", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* startResumed(adapter, {
+        threadId: THREAD_ID,
+        resume: ORIGINAL,
+        turnCount: 1,
+        turnStartMessageIds: ["legacy-turn"],
+      });
+      const result = yield* adapter.rewindFiles!(session.threadId, { numTurns: 1 });
+      assert.equal(result.canRewind, false);
+      assert.match(result.error ?? "", /no file checkpoint/i);
+      assert.deepEqual(harness.query.rewindFilesCalls, []);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("restores through the session that recorded each turn after a rollback fork", () => {
+    let firstTurnId = "";
+    let secondTurnId = "";
+    const harness = makeHarness({
+      forkSession: async () => ({ sessionId: FORK }),
+      getSessionMessages: async (sessionId) =>
+        sessionId === FORK
+          ? [
+              claudeHistoryMessage({
+                type: "user",
+                uuid: `fork-${firstTurnId}`,
+                sessionId,
+                content: "first",
+              }),
+              claudeHistoryMessage({ type: "assistant", uuid: "fork-assistant-1", sessionId }),
+            ]
+          : [
+              claudeHistoryMessage({ type: "system", uuid: "system-init" }),
+              claudeHistoryMessage({ type: "user", uuid: firstTurnId, content: "first" }),
+              claudeHistoryMessage({ type: "assistant", uuid: "assistant-1" }),
+              claudeHistoryMessage({ type: "user", uuid: secondTurnId, content: "second" }),
+              claudeHistoryMessage({ type: "assistant", uuid: "assistant-2" }),
+            ],
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* startResumed(adapter);
+      firstTurnId = String(
+        (yield* sendCompletedClaudeTurn(adapter, harness, session.threadId, "first")).turnId,
+      );
+      secondTurnId = String(
+        (yield* sendCompletedClaudeTurn(adapter, harness, session.threadId, "second")).turnId,
+      );
+      yield* adapter.rollbackThread(session.threadId, 1);
+      const forkQuery = harness.queries.at(-1)!;
+      const third = yield* sendCompletedClaudeTurn(
+        adapter,
+        harness,
+        session.threadId,
+        "third",
+        FORK,
+      );
+      const cursor = (yield* adapter.listSessions())[0]?.resumeCursor as {
+        turnCheckpoints?: unknown;
+      };
+      assert.deepEqual(cursor.turnCheckpoints, [
+        { sessionId: ORIGINAL, messageId: firstTurnId },
+        { sessionId: FORK, messageId: String(third.turnId) },
+      ]);
+
+      const result = yield* adapter.rewindFiles!(session.threadId, { numTurns: 2 });
+      assert.equal(result.canRewind, true);
+      // Preview and restore each reopen the original session, which the fork lacks.
+      const [previewQuery, restoreQuery] = harness.queries.slice(-2);
+      assert.deepEqual(forkQuery.rewindFilesCalls, [
+        { userMessageId: String(third.turnId), dryRun: true },
+        { userMessageId: String(third.turnId), dryRun: false },
+      ]);
+      assert.deepEqual(previewQuery!.rewindFilesCalls, [
+        { userMessageId: firstTurnId, dryRun: true },
+      ]);
+      assert.deepEqual(restoreQuery!.rewindFilesCalls, [
+        { userMessageId: firstTurnId, dryRun: false },
+      ]);
+      assert.equal(previewQuery!.closeCalls, 1);
+      assert.equal(restoreQuery!.closeCalls, 1);
+      const reopened = harness.getLastCreateQueryInput()?.options;
+      assert.equal(reopened?.resume, ORIGINAL);
+      assert.deepEqual(reopened?.settingSources, []);
+      assert.equal(reopened?.enableFileCheckpointing, true);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("stops before writing when any checkpoint in the chain is missing", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* startResumed(adapter);
+      yield* sendCompletedClaudeTurn(adapter, harness, session.threadId, "first");
+      harness.query.rewindFilesResult = () => ({
+        canRewind: false,
+        error: "No file checkpoint found for this message.",
+      });
+      const result = yield* adapter.rewindFiles!(session.threadId, { numTurns: 1 });
+      assert.deepEqual(result, {
+        canRewind: false,
+        filesChanged: [],
+        error: "No file checkpoint found for this message.",
+      });
+      assert.deepEqual(
+        harness.query.rewindFilesCalls.map((call) => call.dryRun),
+        [true],
       );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),

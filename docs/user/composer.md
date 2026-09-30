@@ -104,18 +104,36 @@ into a normal draft.
 
 ## Edit an earlier prompt
 
-On web and desktop, choose **Edit from here** beneath a sent message to rewind
-the conversation to before that message. Choose **Revert and keep changes** to
-leave workspace files as they are, or **Revert files too** to restore them as well.
-File restore is only offered for threads running in a worktree, and it is
-refused when another thread or agent session also uses that directory, since
-restoring would erase their changes. A thread that works in the project directory
-rewinds the conversation only. The selected prompt and its attachments return to the composer for editing and
-resending. Any unsent draft stays above the restored prompt.
+On web and desktop, choose **Edit from here** beneath a sent message, including one
+whose turn you stopped before it finished. If the agent is still working, its turn
+stops first. The dialog lists the files that changed after that message. Then choose:
 
-This removes the selected message and later conversation from the active thread
-and provider history. It does not undo external actions or separate provider
-memory. The action is available only when the provider supports rewind.
+- **Restore conversation** rewinds the conversation to before that message and
+  leaves workspace files as they are.
+- **Restore code** returns files to their state before that message and keeps the
+  conversation.
+- **Restore code and conversation** does both.
+
+Restoring the conversation returns the selected prompt and its attachments to the
+composer for editing and resending. Any unsent draft stays above the restored prompt.
+
+How code is restored depends on where the thread works:
+
+- **An isolated worktree:** the worktree returns to how it was when you sent that
+  message, including changes made by shell commands.
+- **A project directory, possibly shared with other threads:** every file that
+  changed in the thread's repositories while the agent worked after that message
+  returns to how it was when you sent it, including changes made by shell commands.
+  Changes you or another thread made to those same files during that time are undone
+  too. Files that changed only between turns, such as your own edits before sending
+  the next message, are kept. Staged changes stay staged.
+- **Claude** also puts back files its edit tools changed outside the thread's
+  repositories, the same way Claude Code's `/rewind` does.
+
+Restoring the conversation removes the selected message and later conversation from
+the active thread and provider history. It does not undo external actions or
+separate provider memory. The action is available only when the provider supports
+rewind.
 
 ## Prompt stash
 

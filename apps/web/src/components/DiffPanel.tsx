@@ -8,6 +8,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { resolveDiffRepoTargets } from "@t3tools/client-runtime/state/review";
 import type { ScopedThreadRef, TurnId } from "@t3tools/contracts";
 import { resolveAnchorRepoRoot } from "@t3tools/shared/git";
@@ -32,7 +33,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useCodeViewFileReveal } from "./diffs/useCodeViewFileReveal";
 import { useOpenInPreferredEditor } from "../editorPreferences";
 import { useFileContextMenuHandler } from "../fileContextMenu";
-import { type DraftId } from "../composerDraftStore";
+import { type DraftId, useComposerDraftStore } from "../composerDraftStore";
 import { openDiffFilePrimaryAction } from "../diffFileActions";
 import { useCheckpointDiff } from "~/lib/checkpointDiffState";
 import { cn } from "~/lib/utils";
@@ -52,6 +53,7 @@ import {
 } from "../lib/diffRendering";
 import { PREFERRED_HIGHLIGHTER } from "../lib/syntaxHighlighting";
 import { areAllDiffFilesCollapsed, toggleAllDiffFiles } from "../lib/diffCollapse";
+import { repoRootBaseName } from "../lib/turnDiffTree";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { useWorkspaceMutationRefresh } from "../hooks/useWorkspaceMutationRefresh";
 import { useProject, useThread } from "../state/entities";
@@ -124,22 +126,22 @@ function getCachedFileEntry(fileDiff: FileDiffMetadata) {
   return entry;
 }
 
-// Last path segment of a repo root, used to label repos and compare a project's
-// configured roots against the single root the branch diff actually covers
-// (paths differ between a thread worktree and the project checkout, but the repo
-// folder name is stable across both).
-function repoRootBaseName(rootPath: string): string {
-  const trimmed = rootPath.replace(/[/\\]+$/, "");
-  const segments = trimmed.split(/[/\\]/);
-  return segments[segments.length - 1] || trimmed;
-}
-
 interface CollapsedDiffFilesState {
   readonly scopeKey: string | null;
   readonly fileKeys: ReadonlySet<string>;
 }
 
+// Multi-repo sections load their files separately, so the panel cannot list every
+// file up front. Their collapse state is a default plus what was toggled from it.
+interface GroupedCollapseState {
+  readonly scopeKey: string | null;
+  readonly filesCollapsed: boolean;
+  readonly toggledFiles: ReadonlySet<string>;
+  readonly collapsedRepos: ReadonlySet<string>;
+}
+
 const EMPTY_COLLAPSED_DIFF_FILE_KEYS: ReadonlySet<string> = new Set();
+const EMPTY_DRAFT_WORKTREES: ReadonlyArray<never> = [];
 
 interface DiffPanelProps {
   mode?: DiffPanelMode;
@@ -193,6 +195,8 @@ function BranchDiffRepoSection({
   wordWrap,
   refreshToken,
   renderFileDiffEntry,
+  collapsed,
+  onToggleCollapsed,
 }: {
   readonly environmentId: ScopedThreadRef["environmentId"];
   readonly cwd: string;
@@ -204,6 +208,9 @@ function BranchDiffRepoSection({
   /** Bumped by the panel's refresh sources so every repo section refetches. */
   readonly refreshToken: number;
   readonly renderFileDiffEntry: (fileDiff: FileDiffMetadata, repoRoot?: string) => ReactNode;
+  /** Hides the repo's files; its header and count stay visible. */
+  readonly collapsed: boolean;
+  readonly onToggleCollapsed: () => void;
 }) {
   const preview = useEnvironmentQuery(
     reviewEnvironment.diffPreview({
@@ -246,9 +253,19 @@ function BranchDiffRepoSection({
       <Tooltip>
         <TooltipTrigger
           render={
-            <div className="sticky top-0 z-10 mt-2 mb-1 flex items-center gap-2 rounded-md bg-background/95 px-2 py-1 text-xs font-medium text-muted-foreground backdrop-blur first:mt-0" />
+            <button
+              type="button"
+              aria-expanded={!collapsed}
+              onClick={onToggleCollapsed}
+              className="sticky top-0 z-10 mt-2 mb-1 flex w-full cursor-pointer items-center gap-2 rounded-md bg-background/95 px-2 py-1 text-left text-xs font-medium text-muted-foreground backdrop-blur first:mt-0 hover:bg-muted/60"
+            />
           }
         >
+          {collapsed ? (
+            <ChevronRightIcon className="size-3.5 shrink-0" />
+          ) : (
+            <ChevronDownIcon className="size-3.5 shrink-0" />
+          )}
           <span className="truncate text-foreground/90">{repoRootBaseName(repoRoot)}</span>
           <span className="text-muted-foreground/70">{countLabel}</span>
           {source?.truncated === true && <span className="text-warning">truncated</span>}
@@ -257,7 +274,7 @@ function BranchDiffRepoSection({
           <span className="font-mono break-all">{cwd}</span>
         </TooltipPopup>
       </Tooltip>
-      {preview.error && files.length === 0 && !rawPatch ? (
+      {collapsed ? null : preview.error && files.length === 0 && !rawPatch ? (
         <p className="px-2 pb-2 text-2xs text-destructive">{preview.error}</p>
       ) : rawPatch ? (
         <div className="space-y-2 px-2 pb-2">
@@ -303,6 +320,12 @@ export default function DiffPanel({
     scopeKey: null,
     fileKeys: EMPTY_COLLAPSED_DIFF_FILE_KEYS,
   }));
+  const [groupedCollapse, setGroupedCollapse] = useState<GroupedCollapseState>(() => ({
+    scopeKey: null,
+    filesCollapsed: settings.diffFilesCollapsed,
+    toggledFiles: EMPTY_COLLAPSED_DIFF_FILE_KEYS,
+    collapsedRepos: EMPTY_COLLAPSED_DIFF_FILE_KEYS,
+  }));
   const [codeViewRevision, setCodeViewRevision] = useState(0);
   const [codeView, setCodeView] = useState<AnnotatableCodeViewHandle | null>(null);
   const [branchRepoRefreshToken, setBranchRepoRefreshToken] = useState(0);
@@ -313,11 +336,36 @@ export default function DiffPanel({
   });
   const activeThreadId = routeThreadRef?.threadId ?? null;
   const activeThread = useThread(routeThreadRef);
-  const activeProjectId = activeThread?.projectId ?? null;
+  // A draft has no server thread yet, but its project's working tree and branch
+  // already have diffs to review. Turn diffs still need a thread.
+  const draftSession = useComposerDraftStore((store) =>
+    activeThread ? null : store.getDraftThread(composerDraftTarget),
+  );
+  const draftDiffTarget = useMemo(
+    () =>
+      draftSession
+        ? {
+            environmentId: draftSession.environmentId,
+            projectId: draftSession.projectId,
+            worktreePath: draftSession.worktreePath,
+            worktrees: EMPTY_DRAFT_WORKTREES,
+          }
+        : null,
+    [draftSession],
+  );
+  const diffTarget = activeThread ?? draftDiffTarget;
+  // Keys the draft's diff selection by the thread it becomes once sent.
+  const diffThreadRef = useMemo(
+    () =>
+      routeThreadRef ??
+      (draftSession ? scopeThreadRef(draftSession.environmentId, draftSession.threadId) : null),
+    [draftSession, routeThreadRef],
+  );
+  const activeProjectId = diffTarget?.projectId ?? null;
   const activeProject = useProject(
-    activeThread && activeProjectId
+    diffTarget && activeProjectId
       ? {
-          environmentId: activeThread.environmentId,
+          environmentId: diffTarget.environmentId,
           projectId: activeProjectId,
         }
       : null,
@@ -330,11 +378,11 @@ export default function DiffPanel({
   const diffRepoTargets = useMemo(
     () =>
       resolveDiffRepoTargets({
-        threadWorktrees: activeThread?.worktrees ?? [],
-        threadWorktreePath: activeThread?.worktreePath,
+        threadWorktrees: diffTarget?.worktrees ?? [],
+        threadWorktreePath: diffTarget?.worktreePath,
         repoRoots: activeProject?.repoRoots,
       }),
-    [activeThread?.worktrees, activeThread?.worktreePath, activeProject?.repoRoots],
+    [diffTarget?.worktrees, diffTarget?.worktreePath, activeProject?.repoRoots],
   );
   // Git commands need a repo, and a workspace-file project's `workspaceRoot` is
   // just the directory holding the `.code-workspace` — usually not a repo, so
@@ -346,29 +394,29 @@ export default function DiffPanel({
         repoRoots: activeProject.repoRoots,
       })
     : undefined;
-  const activeCwd = activeThread?.worktreePath ?? activeProjectCwd;
-  const activeRepositoryRoot = activeThread?.worktreePath
+  const activeCwd = diffTarget?.worktreePath ?? activeProjectCwd;
+  const activeRepositoryRoot = diffTarget?.worktreePath
     ? undefined
     : activeProject?.repositoryIdentity?.rootPath;
   const serverConfig = useAtomValue(
-    serverEnvironment.configValueAtom(activeThread?.environmentId ?? null),
+    serverEnvironment.configValueAtom(diffTarget?.environmentId ?? null),
   );
-  const onFileContextMenu = useFileContextMenuHandler(activeThread?.environmentId ?? null);
+  const onFileContextMenu = useFileContextMenuHandler(diffTarget?.environmentId ?? null);
   const openInPreferredEditor = useOpenInPreferredEditor(
-    activeThread?.environmentId ?? null,
+    diffTarget?.environmentId ?? null,
     serverConfig?.availableEditors ?? [],
   );
   const getDiffFileContents = useAtomCommand(reviewEnvironment.diffFileContents);
   const gitStatusQuery = useEnvironmentQuery(
-    activeThread !== null && activeThread !== undefined && activeCwd != null
+    diffTarget !== null && activeCwd != null
       ? vcsEnvironment.status({
-          environmentId: activeThread.environmentId,
+          environmentId: diffTarget.environmentId,
           input: { cwd: activeCwd },
         })
       : null,
   );
   const diffSelection = useDiffPanelStore((state) =>
-    selectThreadDiffPanelSelection(state.byThreadKey, routeThreadRef),
+    selectThreadDiffPanelSelection(state.byThreadKey, diffThreadRef),
   );
   const isGitRepo = resolveDiffPanelIsGitRepo({
     diffRepoTargetCount: diffRepoTargets.length,
@@ -404,6 +452,8 @@ export default function DiffPanel({
   const selectedGitScope = diffSelection.kind === "unstaged" ? "unstaged" : "branch";
   const selectedBaseRef = diffSelection.kind === "branch" ? diffSelection.baseRef : null;
   const selectedFilePath = diffSelection.kind === "turn" ? diffSelection.filePath : null;
+  const selectedFileRepoRoot =
+    diffSelection.kind === "turn" ? (diffSelection.repoRoot ?? null) : null;
   const selectedFileRevealRequestId =
     diffSelection.kind === "turn" ? diffSelection.revealRequestId : 0;
   const selectedTurn =
@@ -424,8 +474,8 @@ export default function DiffPanel({
         ? "Latest turn"
         : `Turn ${selectedCheckpointTurnCount ?? "?"}`;
   const reviewSectionId = selectedTurn ? `turn:${selectedTurn.turnId}` : selectedGitScope;
-  const collapseScopeKey = routeThreadRef
-    ? `${routeThreadRef.environmentId}:${routeThreadRef.threadId}:${reviewSectionId}`
+  const collapseScopeKey = diffThreadRef
+    ? `${diffThreadRef.environmentId}:${diffThreadRef.threadId}:${reviewSectionId}`
     : null;
   const codeViewMountKey = `${collapseScopeKey ?? reviewSectionId}:${codeViewRevision}`;
   const reviewSectionTitle = selectedTurn
@@ -457,9 +507,9 @@ export default function DiffPanel({
   // The multi-repo view renders a diff-preview per repo, so the single-cwd
   // preview below would only duplicate one of them over the wire.
   const primaryBranchDiffPreview = useEnvironmentQuery(
-    selectedTurnId === null && !isMultiRepoBranchView && activeThread && activeCwd
+    selectedTurnId === null && !isMultiRepoBranchView && diffTarget && activeCwd
       ? reviewEnvironment.diffPreview({
-          environmentId: activeThread.environmentId,
+          environmentId: diffTarget.environmentId,
           input: {
             cwd: activeCwd,
             ...(selectedBaseRef ? { baseRef: selectedBaseRef } : {}),
@@ -474,9 +524,9 @@ export default function DiffPanel({
     serverConfig?.cwd !== undefined &&
     serverConfig.cwd !== activeCwd;
   const fallbackBranchDiffPreview = useEnvironmentQuery(
-    shouldRetryBranchDiffAtEnvironmentCwd && activeThread && serverConfig
+    shouldRetryBranchDiffAtEnvironmentCwd && diffTarget && serverConfig
       ? reviewEnvironment.diffPreview({
-          environmentId: activeThread.environmentId,
+          environmentId: diffTarget.environmentId,
           input: {
             cwd: serverConfig.cwd,
             ...(selectedBaseRef ? { baseRef: selectedBaseRef } : {}),
@@ -489,9 +539,9 @@ export default function DiffPanel({
     ? fallbackBranchDiffPreview
     : primaryBranchDiffPreview;
   const canRefreshGitDiff =
-    isGitRepo && selectedTurnId === null && activeThread != null && activeCwd != null;
-  const activeThreadRefreshKey = routeThreadRef
-    ? `${routeThreadRef.environmentId}:${routeThreadRef.threadId}`
+    isGitRepo && selectedTurnId === null && diffTarget != null && activeCwd != null;
+  const activeThreadRefreshKey = diffThreadRef
+    ? `${diffThreadRef.environmentId}:${diffThreadRef.threadId}`
     : null;
 
   // Refresh the active diff sources when the panel reopens so a stale cached
@@ -516,25 +566,19 @@ export default function DiffPanel({
 
   const currentLoadDiffFiles = useMemo<FileDiffContentsLoader | undefined>(() => {
     const preview = branchDiffPreview.data;
-    if (selectedTurnId !== null || !activeThread || !preview || !selectedGitSource) {
+    if (selectedTurnId !== null || !diffTarget || !preview || !selectedGitSource) {
       return undefined;
     }
 
     return createGitDiffFileContentsLoader(getDiffFileContents, {
-      environmentId: activeThread.environmentId,
+      environmentId: diffTarget.environmentId,
       cwd: preview.cwd,
       sourceKind: selectedGitSource.kind,
       baseRef: selectedGitSource.baseRef,
       headRef: selectedGitSource.headRef,
       cacheKey: selectedGitSource.diffHash,
     });
-  }, [
-    activeThread,
-    branchDiffPreview.data,
-    getDiffFileContents,
-    selectedGitSource,
-    selectedTurnId,
-  ]);
+  }, [diffTarget, branchDiffPreview.data, getDiffFileContents, selectedGitSource, selectedTurnId]);
   const loadDiffFilesRef = useRef(currentLoadDiffFiles);
   loadDiffFilesRef.current = currentLoadDiffFiles;
   const loadDiffFiles = useCallback<FileDiffContentsLoader>(async (fileDiff) => {
@@ -545,10 +589,10 @@ export default function DiffPanel({
   const localBranchRefs = useEnvironmentQuery(
     selectedTurnId === null &&
       selectedGitScope === "branch" &&
-      activeThread &&
+      diffTarget &&
       branchDiffPreview.data?.cwd
       ? vcsEnvironment.listRefs({
-          environmentId: activeThread.environmentId,
+          environmentId: diffTarget.environmentId,
           input: {
             cwd: branchDiffPreview.data.cwd,
             includeMatchingRemoteRefs: true,
@@ -562,10 +606,10 @@ export default function DiffPanel({
   const remoteBranchRefs = useEnvironmentQuery(
     selectedTurnId === null &&
       selectedGitScope === "branch" &&
-      activeThread &&
+      diffTarget &&
       branchDiffPreview.data?.cwd
       ? vcsEnvironment.listRefs({
-          environmentId: activeThread.environmentId,
+          environmentId: diffTarget.environmentId,
           input: {
             cwd: branchDiffPreview.data.cwd,
             includeMatchingRemoteRefs: true,
@@ -628,7 +672,7 @@ export default function DiffPanel({
     settledFileCount,
     loadNextFiles,
   } = useReviewFilePatches({
-    environmentId: activeThread?.environmentId,
+    environmentId: diffTarget?.environmentId,
     cwd: branchDiffPreview.data?.cwd,
     source: lazySource,
     baseRef: lazySource?.baseRef ?? selectedBaseRef,
@@ -755,10 +799,10 @@ export default function DiffPanel({
   // edits made elsewhere (e.g. a separate VS Code window) won't appear here.
   // A turn diff that touched exactly one repo of a multi-repo run names that
   // repo's worktree; the thread's anchor worktree would mislabel the files.
-  const diffWorktreePath = activeThread?.worktreePath
+  const diffWorktreePath = diffTarget?.worktreePath
     ? selectedTurn && renderableGroups.length === 1
-      ? (renderableGroups[0]?.repoRoot ?? activeThread.worktreePath)
-      : activeThread.worktreePath
+      ? (renderableGroups[0]?.repoRoot ?? diffTarget.worktreePath)
+      : diffTarget.worktreePath
     : null;
 
   // Repo filter options come from whichever multi-repo view is active: the
@@ -802,7 +846,11 @@ export default function DiffPanel({
   );
   const selectedFileTreePath =
     selectedFilePath && isGroupedDiffView
-      ? groupedDiffFileTreePath(fileTreeGroups, selectedFilePath)
+      ? groupedDiffFileTreePath(
+          fileTreeGroups,
+          selectedFilePath,
+          selectedFileRepoRoot === null ? undefined : repoRootBaseName(selectedFileRepoRoot),
+        )
       : selectedFilePath;
 
   useEffect(() => {
@@ -923,6 +971,55 @@ export default function DiffPanel({
     });
   }, [collapseScopeKey, defaultCollapsedDiffFileKeys, diffFileKeys]);
 
+  const groupedCollapseForScope: GroupedCollapseState =
+    groupedCollapse.scopeKey === collapseScopeKey
+      ? groupedCollapse
+      : {
+          scopeKey: collapseScopeKey,
+          filesCollapsed: settings.diffFilesCollapsed,
+          toggledFiles: EMPTY_COLLAPSED_DIFF_FILE_KEYS,
+          collapsedRepos: EMPTY_COLLAPSED_DIFF_FILE_KEYS,
+        };
+  const usesGroupedCollapse = isMultiRepoBranchView || isGroupedDiffView;
+  const allFilesCollapsed = usesGroupedCollapse
+    ? groupedCollapseForScope.filesCollapsed && groupedCollapseForScope.toggledFiles.size === 0
+    : allDiffFilesCollapsed;
+  const updateGroupedCollapse = (update: (state: GroupedCollapseState) => GroupedCollapseState) =>
+    setGroupedCollapse((current) =>
+      update(
+        current.scopeKey === collapseScopeKey
+          ? current
+          : {
+              scopeKey: collapseScopeKey,
+              filesCollapsed: settings.diffFilesCollapsed,
+              toggledFiles: EMPTY_COLLAPSED_DIFF_FILE_KEYS,
+              collapsedRepos: EMPTY_COLLAPSED_DIFF_FILE_KEYS,
+            },
+      ),
+    );
+  const groupedFileKey = (repoRoot: string, fileKey: string) => `${repoRoot}\0${fileKey}`;
+  const toggleGroupedFileCollapsed = (repoRoot: string, fileKey: string) =>
+    updateGroupedCollapse((state) => {
+      const toggledFiles = new Set(state.toggledFiles);
+      const key = groupedFileKey(repoRoot, fileKey);
+      if (!toggledFiles.delete(key)) toggledFiles.add(key);
+      return { ...state, toggledFiles };
+    });
+  const toggleRepoCollapsed = (repoRoot: string) =>
+    updateGroupedCollapse((state) => {
+      const collapsedRepos = new Set(state.collapsedRepos);
+      if (!collapsedRepos.delete(repoRoot)) collapsedRepos.add(repoRoot);
+      return { ...state, collapsedRepos };
+    });
+  const toggleAllFilesCollapsed = usesGroupedCollapse
+    ? () =>
+        updateGroupedCollapse((state) => ({
+          ...state,
+          filesCollapsed: !allFilesCollapsed,
+          toggledFiles: EMPTY_COLLAPSED_DIFF_FILE_KEYS,
+        }))
+    : toggleDiffFileCollapse;
+
   // Renders a single file's diff card. `repoRoot` is set in grouped (multi-repo)
   // mode so open-file resolves against that repo and the React key stays unique
   // when two repos share a relative path.
@@ -930,7 +1027,11 @@ export default function DiffPanel({
     const filePath = resolveFileDiffPath(fileDiff);
     const fileKey = buildFileDiffRenderKey(fileDiff);
     const themedFileKey = `${repoRoot ?? ""}:${fileKey}:${resolvedTheme}`;
-    const collapsed = collapsedDiffFileKeys.has(fileKey);
+    const collapsed =
+      repoRoot === undefined
+        ? collapsedDiffFileKeys.has(fileKey)
+        : groupedCollapseForScope.filesCollapsed !==
+          groupedCollapseForScope.toggledFiles.has(groupedFileKey(repoRoot, fileKey));
     return (
       <div
         key={themedFileKey}
@@ -963,7 +1064,8 @@ export default function DiffPanel({
                     aria-expanded={!collapsed}
                     onClick={(event) => {
                       event.stopPropagation();
-                      toggleDiffFileCollapsed(fileKey);
+                      if (repoRoot === undefined) toggleDiffFileCollapsed(fileKey);
+                      else toggleGroupedFileCollapsed(repoRoot, fileKey);
                     }}
                   />
                 }
@@ -996,12 +1098,12 @@ export default function DiffPanel({
     useDiffPanelStore.getState().selectTurn(routeThreadRef, turnId);
   };
   const selectGitScope = (scope: "branch" | "unstaged") => {
-    if (!routeThreadRef) return;
-    useDiffPanelStore.getState().selectGitScope(routeThreadRef, scope);
+    if (!diffThreadRef) return;
+    useDiffPanelStore.getState().selectGitScope(diffThreadRef, scope);
   };
   const selectBranchBaseRef = (baseRef: string | null) => {
-    if (!routeThreadRef) return;
-    useDiffPanelStore.getState().selectBranchBaseRef(routeThreadRef, baseRef);
+    if (!diffThreadRef) return;
+    useDiffPanelStore.getState().selectBranchBaseRef(diffThreadRef, baseRef);
   };
   // The scope menu has two radio groups: the top-level one treats the latest
   // turn as "latest", while the turn sub-menu keys every turn by id so the
@@ -1271,7 +1373,7 @@ export default function DiffPanel({
             </TooltipPopup>
           </Tooltip>
         )}
-        {diffFileKeys.length > 0 && (
+        {(diffFileKeys.length > 0 || usesGroupedCollapse) && (
           <Tooltip>
             <TooltipTrigger
               render={
@@ -1279,19 +1381,19 @@ export default function DiffPanel({
                   type="button"
                   size="icon-sm"
                   variant="ghost"
-                  aria-label={allDiffFilesCollapsed ? "Expand all files" : "Collapse all files"}
-                  onClick={toggleDiffFileCollapse}
+                  aria-label={allFilesCollapsed ? "Expand all files" : "Collapse all files"}
+                  onClick={toggleAllFilesCollapsed}
                 />
               }
             >
-              {allDiffFilesCollapsed ? (
+              {allFilesCollapsed ? (
                 <ChevronsUpDownIcon className="size-3.5" />
               ) : (
                 <ChevronsDownUpIcon className="size-3.5" />
               )}
             </TooltipTrigger>
             <TooltipPopup side="top">
-              {allDiffFilesCollapsed ? "Expand all files" : "Collapse all files"}
+              {allFilesCollapsed ? "Expand all files" : "Collapse all files"}
             </TooltipPopup>
           </Tooltip>
         )}
@@ -1382,7 +1484,7 @@ export default function DiffPanel({
 
   return (
     <DiffPanelShell mode={mode} header={headerRow}>
-      {!activeThread ? (
+      {!diffTarget ? (
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
           Select a thread to inspect turn diffs.
         </div>
@@ -1413,7 +1515,7 @@ export default function DiffPanel({
                 {visibleDiffTargets.map((entry) => (
                   <BranchDiffRepoSection
                     key={entry.repoRoot}
-                    environmentId={activeThread.environmentId}
+                    environmentId={diffTarget.environmentId}
                     cwd={entry.cwd}
                     repoRoot={entry.repoRoot}
                     scope={selectedGitScope}
@@ -1422,6 +1524,8 @@ export default function DiffPanel({
                     wordWrap={wordWrap}
                     refreshToken={branchRepoRefreshToken}
                     renderFileDiffEntry={renderFileDiffEntry}
+                    collapsed={groupedCollapseForScope.collapsedRepos.has(entry.repoRoot)}
+                    onToggleCollapsed={() => toggleRepoCollapsed(entry.repoRoot)}
                   />
                 ))}
               </div>
@@ -1491,7 +1595,7 @@ export default function DiffPanel({
                     event.preventDefault();
                     onFileContextMenu(
                       {
-                        environmentId: activeThread?.environmentId ?? null,
+                        environmentId: diffTarget?.environmentId ?? null,
                         filePath,
                         workspaceRoot: activeCwd,
                         repositoryRoot: activeRepositoryRoot,
@@ -1512,26 +1616,45 @@ export default function DiffPanel({
                         intersectionObserverMargin: 1200,
                       }}
                     >
-                      {visibleGroups.flatMap((group) => [
-                        <Tooltip key={`diff-group:${group.repoRoot}`}>
-                          <TooltipTrigger
-                            render={
-                              <div className="sticky top-0 z-10 mt-2 mb-1 flex items-center gap-2 rounded-md bg-background/95 px-2 py-1 text-xs font-medium text-muted-foreground backdrop-blur first:mt-0" />
-                            }
-                          >
-                            <span className="truncate text-foreground/90">{group.displayName}</span>
-                            <span className="text-muted-foreground/70">
-                              {group.files.length} {group.files.length === 1 ? "file" : "files"}
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipPopup side="bottom" className="max-w-80 whitespace-normal">
-                            <span className="font-mono break-all">{group.repoRoot}</span>
-                          </TooltipPopup>
-                        </Tooltip>,
-                        ...group.files.map((fileDiff) =>
-                          renderFileDiffEntry(fileDiff, group.repoRoot),
-                        ),
-                      ])}
+                      {visibleGroups.flatMap((group) => {
+                        const repoCollapsed = groupedCollapseForScope.collapsedRepos.has(
+                          group.repoRoot,
+                        );
+                        return [
+                          <Tooltip key={`diff-group:${group.repoRoot}`}>
+                            <TooltipTrigger
+                              render={
+                                <button
+                                  type="button"
+                                  aria-expanded={!repoCollapsed}
+                                  onClick={() => toggleRepoCollapsed(group.repoRoot)}
+                                  className="sticky top-0 z-10 mt-2 mb-1 flex w-full cursor-pointer items-center gap-2 rounded-md bg-background/95 px-2 py-1 text-left text-xs font-medium text-muted-foreground backdrop-blur first:mt-0 hover:bg-muted/60"
+                                />
+                              }
+                            >
+                              {repoCollapsed ? (
+                                <ChevronRightIcon className="size-3.5 shrink-0" />
+                              ) : (
+                                <ChevronDownIcon className="size-3.5 shrink-0" />
+                              )}
+                              <span className="truncate text-foreground/90">
+                                {group.displayName}
+                              </span>
+                              <span className="text-muted-foreground/70">
+                                {group.files.length} {group.files.length === 1 ? "file" : "files"}
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipPopup side="bottom" className="max-w-80 whitespace-normal">
+                              <span className="font-mono break-all">{group.repoRoot}</span>
+                            </TooltipPopup>
+                          </Tooltip>,
+                          ...(repoCollapsed
+                            ? []
+                            : group.files.map((fileDiff) =>
+                                renderFileDiffEntry(fileDiff, group.repoRoot),
+                              )),
+                        ];
+                      })}
                     </Virtualizer>
                   ) : (
                     <AnnotatableCodeView

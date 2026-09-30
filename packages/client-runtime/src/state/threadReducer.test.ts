@@ -1612,6 +1612,61 @@ describe("applyThreadDetailEvent", () => {
       }
     });
 
+    it("keeps the user messages that started retained turns", () => {
+      const userMessage = (id: string, createdAt: string) => ({
+        id: MessageId.make(id),
+        role: "user" as const,
+        text: id,
+        turnId: null,
+        streaming: false,
+        createdAt,
+        updatedAt: createdAt,
+      });
+      const checkpoint = (turn: number, userMessageId: string) => ({
+        turnId: TurnId.make(`turn-${turn}`),
+        checkpointTurnCount: turn,
+        checkpointRef: CheckpointRef.make(`refs/t3/checkpoints/thread-1/turn/${turn}`),
+        status: "missing" as const,
+        files: [],
+        assistantMessageId: null,
+        userMessageId: MessageId.make(userMessageId),
+        completedAt: "2026-04-01T05:00:00.000Z",
+      });
+      const result = applyThreadDetailEvent(
+        {
+          ...baseThread,
+          messages: [
+            userMessage("started-1", "2026-04-01T01:00:00.000Z"),
+            userMessage("never-started", "2026-04-01T02:00:00.000Z"),
+            userMessage("started-2", "2026-04-01T03:00:00.000Z"),
+            userMessage("stopped-3", "2026-04-01T04:00:00.000Z"),
+          ],
+          checkpoints: [
+            checkpoint(1, "started-1"),
+            checkpoint(2, "started-2"),
+            checkpoint(3, "stopped-3"),
+          ],
+        },
+        {
+          ...baseEventFields,
+          sequence: 14,
+          occurredAt: "2026-04-01T06:00:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.reverted",
+          payload: { threadId: ThreadId.make("thread-1"), turnCount: 2 },
+        },
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.messages.map((message) => message.id)).toEqual([
+          "started-1",
+          "started-2",
+        ]);
+      }
+    });
+
     it("filters entities to retained turns", () => {
       const threadWithData: OrchestrationThread = {
         ...baseThread,

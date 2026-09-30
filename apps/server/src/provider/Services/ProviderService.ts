@@ -32,7 +32,11 @@ import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 
 import type { ProviderServiceError } from "../Errors.ts";
-import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
+import type {
+  ProviderAdapterCapabilities,
+  ProviderFileRewindInput,
+  ProviderFileRewindResult,
+} from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
 
 /**
@@ -120,6 +124,22 @@ export interface ProviderServiceShape {
     readonly threadId: ThreadId;
     readonly numTurns: number;
   }) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * Whether the thread's provider restores files from its own checkpoints,
+   * answered without resuming the session. Optional so test doubles can omit it.
+   */
+  readonly supportsNativeFileRewind?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<boolean, ProviderServiceError>;
+
+  /**
+   * Restore files from the provider's own checkpoints. Fails when the provider
+   * has no native file rewind; check `supportsNativeFileRewind` first.
+   */
+  readonly rewindFiles?: (
+    input: ProviderFileRewindInput & { readonly threadId: ThreadId },
+  ) => Effect.Effect<ProviderFileRewindResult, ProviderServiceError>;
 
   /**
    * Upload a thread and return the provider's shareable feedback identifier.

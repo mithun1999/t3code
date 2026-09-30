@@ -107,6 +107,7 @@ import { useLocation, useNavigate } from "@tanstack/react-router";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { assistantCitationFromLocation } from "../lib/assistantCitationNavigation";
 import { isMacPlatform } from "../lib/utils";
+import { repoRootBaseName } from "../lib/turnDiffTree";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -457,6 +458,10 @@ import {
   resolveFileAttachmentUrl,
   prepareRevertedMessageAttachments,
   waitForRevertedMessage,
+  waitForStoppedTurn,
+  collectRewoundFiles,
+  hideRewoundTimelineEntries,
+  waitForRestoredFiles,
   reconcileMountedTerminalThreadIds,
   recallCheckoutIsRepo,
   rememberCheckoutIsRepo,
@@ -1463,6 +1468,7 @@ function chatActionErrorMessage(error: unknown): string {
 
 const ENVIRONMENT_UNAVAILABLE_SEND_TOAST_TRAIL_SIZE = 3;
 const EMPTY_HELD_TURN_DIFF_SUMMARIES: readonly never[] = [];
+const REWIND_PREVIEW_FILE_LIMIT = 8;
 const noopHeldTurnDiff = (_turnId: TurnId, _filePath?: string) => {};
 const noopHeldRevert = (_targetTurnCount: number) => {};
 const noopHeldAttachment = (_attachment: ChatFileAttachment) => {};
@@ -1741,6 +1747,12 @@ export default function ChatView(props: ChatViewProps) {
   const isRevertingCheckpoint = useComposerDraftStore((store) =>
     store.rewindingThreadKeys.has(routeThreadKey),
   );
+  // Hides the rewound prompt onward as soon as a rewind is confirmed, so it
+  // reads as instant while the server forks the agent's session.
+  const [optimisticRewind, setOptimisticRewind] = useState<{
+    readonly threadKey: string;
+    readonly messageId: MessageId;
+  } | null>(null);
   const [maximizedRightPanelThreadKey, setMaximizedRightPanelThreadKey] = useState<string | null>(
     null,
   );
@@ -3242,13 +3254,9 @@ export default function ChatView(props: ChatViewProps) {
     activeServerThread.id === routeThreadRef.threadId &&
     activeServerThread.latestTurn === null &&
     recordedWorktreeSetup?.phase === "running";
+  // A rewind is not agent work: it shows at once and only holds sends.
   const isWorking =
-    phase === "running" ||
-    isSendBusy ||
-    isConnecting ||
-    isRevertingCheckpoint ||
-    isCompacting ||
-    awaitingBootstrapTurn;
+    phase === "running" || isSendBusy || isConnecting || isCompacting || awaitingBootstrapTurn;
   const isPreparingWorktree = isLocallyPreparingWorktree || awaitingBootstrapTurn;
   const activeWorkStartedAt = deriveActiveWorkStartedAt(
     activeLatestTurn,
@@ -3530,10 +3538,16 @@ export default function ChatView(props: ChatViewProps) {
     timelineMessages,
     workLogEntries,
   ]);
+  const rewoundMessageId =
+    optimisticRewind?.threadKey === routeThreadKey ? optimisticRewind.messageId : null;
+  const visibleTimelineEntries = useMemo(
+    () => hideRewoundTimelineEntries(timelineEntries, rewoundMessageId),
+    [timelineEntries, rewoundMessageId],
+  );
   const displayedTimeline = resolveThreadSwitchTimeline({
     loading: timelineEntries.length === 0 && threadSyncPhase !== null,
     activeThreadKey,
-    nextEntries: timelineEntries,
+    nextEntries: visibleTimelineEntries,
     rememberedForActive: peekRememberedThreadTimeline<typeof timelineEntries>(activeThreadKey),
   });
   const displayedTimelineKey = displayedTimeline.displayThreadKey ?? routeThreadKey;
@@ -3853,6 +3867,9 @@ export default function ChatView(props: ChatViewProps) {
   const isGitRepo = isMultiRepo
     ? vcsStatusGroups.length === 0 || gitRepoGroups.length > 0
     : (liveIsGitRepo ?? recallCheckoutIsRepo(environmentId, gitStatusCwd) ?? true);
+  // Working-tree and branch diffs need a project, not a sent message, so a draft
+  // can review them too. Turn diffs stay with server threads.
+  const canReviewDiff = (isServerThread || activeProject !== null) && isGitRepo;
   // Keep a hidden, off-flow strip mounted for existing threads so the composer
   // can measure whether its relocated controls fit. The visible chrome remains
   // content-driven: Git/environment context or controls that actually fit.
@@ -3895,7 +3912,7 @@ export default function ChatView(props: ChatViewProps) {
     [keybindings, terminalShortcutLabelOptions],
   );
   const onToggleDiff = useCallback(() => {
-    if (!isServerThread) {
+    if (!canReviewDiff) {
       return;
     }
     if (!diffOpen) {
@@ -3904,7 +3921,7 @@ export default function ChatView(props: ChatViewProps) {
     if (activeThreadRef) {
       useRightPanelStore.getState().toggle(activeThreadRef, "diff");
     }
-  }, [activeThreadRef, diffOpen, isServerThread, onDiffPanelOpen]);
+  }, [activeThreadRef, canReviewDiff, diffOpen, onDiffPanelOpen]);
 
   const needsLoadBalancing = automaticEnvironment && !draftThread?.loadBalancedEnvironmentId;
   const loadBalancingCandidates = useMemo(
@@ -4670,11 +4687,11 @@ export default function ChatView(props: ChatViewProps) {
     [activeThreadRef, openPreview],
   );
   const addDiffSurface = useCallback(() => {
-    if (!activeThreadRef || !isServerThread || !isGitRepo) return;
+    if (!activeThreadRef || !canReviewDiff) return;
     useDiffPanelStore.getState().selectGitScope(activeThreadRef, "unstaged");
     useRightPanelStore.getState().open(activeThreadRef, "diff");
     onDiffPanelOpen?.();
-  }, [activeThreadRef, isGitRepo, isServerThread, onDiffPanelOpen]);
+  }, [activeThreadRef, canReviewDiff, onDiffPanelOpen]);
   const addFilesSurface = useCallback(() => {
     if (!activeThreadRef || !activeProject) return;
     useRightPanelStore.getState().open(activeThreadRef, "files");
@@ -6536,6 +6553,7 @@ export default function ChatView(props: ChatViewProps) {
     !isServerThread ||
     !manualCompactionProviderAvailable ||
     isWorking ||
+    isRevertingCheckpoint ||
     threadDetailLoading ||
     isPreparingWorktree ||
     activeEnvironmentUnavailable ||
@@ -7149,9 +7167,21 @@ export default function ChatView(props: ChatViewProps) {
   if (pendingRevert && pendingRevert.routeThreadKey !== routeThreadKey) {
     setPendingRevert(null);
   }
+  const pendingRevertFiles = useMemo(
+    () =>
+      pendingRevert === null || !activeThread
+        ? []
+        : collectRewoundFiles(activeThread.checkpoints, pendingRevert.turnCount),
+    [activeThread, pendingRevert],
+  );
 
   const onRevertToTurnCount = useCallback(
-    async (turnCount: number, messageId: MessageId, restoreFiles?: boolean) => {
+    async (
+      turnCount: number,
+      messageId: MessageId,
+      restoreFiles?: boolean,
+      restoreConversation?: boolean,
+    ) => {
       const localApi = readLocalApi();
       if (!localApi || !activeThread || isRevertingCheckpoint) return;
       const message = activeThread.messages.find((message) => message.id === messageId);
@@ -7171,12 +7201,68 @@ export default function ChatView(props: ChatViewProps) {
         );
         return;
       }
-      if (phase === "running" || isSendBusy || isConnecting) {
-        setThreadError(activeThread.id, "Interrupt the current turn before reverting checkpoints.");
+      if (isSendBusy || isConnecting) {
+        setThreadError(activeThread.id, "Wait for the message to send before rewinding.");
         return;
       }
       if (restoreFiles === undefined) {
         setPendingRevert({ turnCount, messageId, routeThreadKey });
+        return;
+      }
+      // A running turn is stopped first, as in Paseo. Once its checkpoint is
+      // captured it rewinds like any other turn.
+      const runningTurnId =
+        phase === "running" ? (activeThread.session?.activeTurnId ?? null) : null;
+      const stopRunningTurn = async () => {
+        if (runningTurnId === null) return;
+        await waitForStoppedTurn(routeThreadRef, runningTurnId, async () => {
+          const result = await interruptThreadTurn({
+            environmentId,
+            input: buildThreadTurnInterruptInput(activeThread),
+          });
+          if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+        });
+      };
+
+      if (restoreConversation === false) {
+        // Restore code only: every message stays, so the composer is left alone.
+        useComposerDraftStore.setState((store) => ({
+          rewindingThreadKeys: new Set(store.rewindingThreadKeys).add(routeThreadKey),
+        }));
+        setThreadError(activeThread.id, null);
+        const progressToastId = toastManager.add({
+          type: "loading",
+          title: "Restoring code…",
+          timeout: 0,
+        });
+        try {
+          await stopRunningTurn();
+          const detail = await waitForRestoredFiles(routeThreadRef, async () => {
+            const result = await revertThreadCheckpoint({
+              environmentId,
+              input: { threadId: activeThread.id, turnCount, restoreConversation: false },
+            });
+            if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+          });
+          toastManager.update(progressToastId, {
+            type: "success",
+            title: "Code restored",
+            description: detail,
+            timeout: 4000,
+          });
+        } catch (error) {
+          toastManager.close(progressToastId);
+          setThreadError(
+            activeThread.id,
+            error instanceof Error ? error.message : "Failed to restore files.",
+          );
+        } finally {
+          useComposerDraftStore.setState((store) => {
+            const remaining = new Set(store.rewindingThreadKeys);
+            remaining.delete(routeThreadKey);
+            return { rewindingThreadKeys: remaining };
+          });
+        }
         return;
       }
 
@@ -7184,6 +7270,8 @@ export default function ChatView(props: ChatViewProps) {
         rewindingThreadKeys: new Set(store.rewindingThreadKeys).add(routeThreadKey),
       }));
       setThreadError(activeThread.id, null);
+      setOptimisticRewind({ threadKey: routeThreadKey, messageId });
+      let undoComposerRestore: (() => void) | null = null;
       try {
         if (composerRef.current?.hasPendingAttachments()) {
           throw new Error("Wait for attachments to finish preparing before rewinding.");
@@ -7206,13 +7294,7 @@ export default function ChatView(props: ChatViewProps) {
             "Make room for this message's attachments in the composer before rewinding.",
           );
         }
-        await waitForRevertedMessage(routeThreadRef, messageId, turnCount, async () => {
-          const result = await revertThreadCheckpoint({
-            environmentId,
-            input: { threadId: activeThread.id, turnCount, restoreFiles },
-          });
-          if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-        });
+        // The prompt returns at once; only sending waits for the server's fork.
         const currentPrompt = store.getComposerDraft(composerDraftTarget)?.prompt ?? "";
         const restoredPrompt = recallableComposerPrompt(message.text);
         const nextPrompt =
@@ -7248,12 +7330,38 @@ export default function ChatView(props: ChatViewProps) {
               composerRef.current?.focusAtEnd();
           });
         }
+        // A failed rewind keeps the message, so take the copy back out unless the
+        // user has already started editing it.
+        undoComposerRestore = () => {
+          const latest = useComposerDraftStore.getState();
+          if (latest.getComposerDraft(composerDraftTarget)?.prompt !== nextPrompt) return;
+          latest.setPrompt(composerDraftTarget, currentPrompt);
+          for (const image of images) latest.removeImage(composerDraftTarget, image.id);
+          for (const file of restoredFiles) latest.removeFile(composerDraftTarget, file.id);
+          if (currentRouteThreadKeyRef.current === routeThreadKey) {
+            promptRef.current = currentPrompt;
+            composerRef.current?.resetCursorState({
+              prompt: currentPrompt,
+              cursor: currentPrompt.length,
+            });
+          }
+        };
+        await stopRunningTurn();
+        await waitForRevertedMessage(routeThreadRef, messageId, turnCount, async () => {
+          const result = await revertThreadCheckpoint({
+            environmentId,
+            input: { threadId: activeThread.id, turnCount, restoreFiles },
+          });
+          if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+        });
       } catch (error) {
+        undoComposerRestore?.();
         setThreadError(
           activeThread.id,
           error instanceof Error ? error.message : "Failed to revert thread state.",
         );
       } finally {
+        setOptimisticRewind((current) => (current?.messageId === messageId ? null : current));
         useComposerDraftStore.setState((store) => {
           const remaining = new Set(store.rewindingThreadKeys);
           remaining.delete(routeThreadKey);
@@ -7269,6 +7377,7 @@ export default function ChatView(props: ChatViewProps) {
       composerRef,
       createAttachmentAssetUrl,
       environmentId,
+      interruptThreadTurn,
       isConnecting,
       isRevertingCheckpoint,
       isSendBusy,
@@ -7280,6 +7389,17 @@ export default function ChatView(props: ChatViewProps) {
       supportsConversationRollback,
     ],
   );
+
+  const confirmPendingRevert = (restoreFiles: boolean, restoreConversation = true) => {
+    if (!pendingRevert || pendingRevert.routeThreadKey !== routeThreadKey) return;
+    setPendingRevert(null);
+    void onRevertToTurnCount(
+      pendingRevert.turnCount,
+      pendingRevert.messageId,
+      restoreFiles,
+      restoreConversation,
+    );
+  };
 
   const onCompactContext = async () => {
     if (compactDisabled || !activeThread || !clientSettingsHydrated || sendInFlightRef.current) {
@@ -9549,10 +9669,10 @@ export default function ChatView(props: ChatViewProps) {
     setExpandedImage(preview);
   }, []);
   const onOpenTurnDiff = useCallback(
-    (turnId: TurnId, filePath?: string) => {
+    (turnId: TurnId, filePath?: string, repoRoot?: string) => {
       if (!isServerThread || !activeThreadRef) return;
       explicitDiffOpenRef.current = diffOpen ? null : activeThreadRef;
-      useDiffPanelStore.getState().selectTurn(activeThreadRef, turnId, filePath);
+      useDiffPanelStore.getState().selectTurn(activeThreadRef, turnId, filePath, repoRoot);
       useRightPanelStore.getState().open(activeThreadRef, "diff");
       onDiffPanelOpen?.();
     },
@@ -10437,7 +10557,7 @@ export default function ChatView(props: ChatViewProps) {
           onAddDevice={addDeviceSurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           terminalAvailable={activeProject !== null}
-          diffAvailable={isServerThread && isGitRepo}
+          diffAvailable={canReviewDiff}
           filesAvailable={activeProject !== null}
           pullRequestAvailable={pullRequestSurfaceAvailable}
           pullRequestsAvailable={pullRequestsSurfaceAvailable}
@@ -10495,7 +10615,7 @@ export default function ChatView(props: ChatViewProps) {
             onAddDevice={addDeviceSurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             terminalAvailable={activeProject !== null}
-            diffAvailable={isServerThread && isGitRepo}
+            diffAvailable={canReviewDiff}
             filesAvailable={activeProject !== null}
             pullRequestAvailable={pullRequestSurfaceAvailable}
             pullRequestsAvailable={pullRequestsSurfaceAvailable}
@@ -10518,35 +10638,49 @@ export default function ChatView(props: ChatViewProps) {
           <AlertDialogHeader>
             <AlertDialogTitle>Edit from here?</AlertDialogTitle>
             <AlertDialogDescription>
-              Rewind chat to before this message. Your prompt and attachments return to the
-              composer.
-              {activeWorktreePath === null
-                ? " Files stay as they are because this thread shares the project directory."
-                : null}
+              Restoring the conversation rewinds chat to before this message and returns your prompt
+              and attachments to the composer.
+              {activeWorktreePath !== null
+                ? " Restoring code resets this thread's worktree to before this message."
+                : " Restoring code returns every file that changed while the agent worked after this message, shell edits included, to how it was when you sent it. Files only you changed between turns are kept."}
+              {phase === "running" ? " The running turn is stopped first." : null}
             </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
-            {activeWorktreePath !== null ? (
-              <Button
-                variant="destructive"
-                onClick={() => {
-                  if (!pendingRevert || pendingRevert.routeThreadKey !== routeThreadKey) return;
-                  setPendingRevert(null);
-                  void onRevertToTurnCount(pendingRevert.turnCount, pendingRevert.messageId, true);
-                }}
-              >
-                Revert files too
-              </Button>
+            {pendingRevertFiles.length > 0 ? (
+              <div className="text-left text-muted-foreground text-xs">
+                <p>
+                  {pendingRevertFiles.length} {pendingRevertFiles.length === 1 ? "file" : "files"}{" "}
+                  changed after this message:
+                </p>
+                <ul className="mt-1 max-h-32 overflow-auto font-mono">
+                  {pendingRevertFiles.slice(0, REWIND_PREVIEW_FILE_LIMIT).map((file) => {
+                    const displayPath =
+                      file.repoRoot === undefined
+                        ? file.path
+                        : `${repoRootBaseName(file.repoRoot)}/${file.path}`;
+                    return (
+                      <li key={`${file.repoRoot ?? ""}:${file.path}`} className="truncate">
+                        {displayPath}
+                      </li>
+                    );
+                  })}
+                  {pendingRevertFiles.length > REWIND_PREVIEW_FILE_LIMIT ? (
+                    <li>and {pendingRevertFiles.length - REWIND_PREVIEW_FILE_LIMIT} more</li>
+                  ) : null}
+                </ul>
+              </div>
             ) : null}
-            <Button
-              onClick={() => {
-                if (!pendingRevert || pendingRevert.routeThreadKey !== routeThreadKey) return;
-                setPendingRevert(null);
-                void onRevertToTurnCount(pendingRevert.turnCount, pendingRevert.messageId, false);
-              }}
-            >
-              Revert and keep changes
+          </AlertDialogHeader>
+          {/* Stacked like Claude Code's rewind menu; four labels do not fit one row. */}
+          <AlertDialogFooter className="sm:flex-col-reverse">
+            <AlertDialogClose render={<Button variant="outline" />}>Never mind</AlertDialogClose>
+            <Button variant="outline" onClick={() => confirmPendingRevert(true, false)}>
+              Restore code
+            </Button>
+            <Button variant="outline" onClick={() => confirmPendingRevert(false)}>
+              Restore conversation
+            </Button>
+            <Button variant="destructive" onClick={() => confirmPendingRevert(true)}>
+              Restore code and conversation
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

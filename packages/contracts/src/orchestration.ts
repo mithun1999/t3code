@@ -636,6 +636,8 @@ export const OrchestrationCheckpointFile = Schema.Struct({
   kind: TrimmedNonEmptyString,
   additions: NonNegativeInt,
   deletions: NonNegativeInt,
+  /** The repository `path` is relative to. Set when a thread spans several. */
+  repoRoot: Schema.optional(TrimmedNonEmptyString),
 });
 export type OrchestrationCheckpointFile = typeof OrchestrationCheckpointFile.Type;
 
@@ -649,6 +651,8 @@ export const OrchestrationCheckpointSummary = Schema.Struct({
   status: OrchestrationCheckpointStatus,
   files: Schema.Array(OrchestrationCheckpointFile),
   assistantMessageId: Schema.NullOr(MessageId),
+  /** The user message that started the turn. Links turns stopped before any reply. */
+  userMessageId: Schema.optional(MessageId),
   completedAt: IsoDateTime,
 });
 export type OrchestrationCheckpointSummary = typeof OrchestrationCheckpointSummary.Type;
@@ -1455,6 +1459,13 @@ const ThreadConversationRevertCommand = Schema.Struct({
   type: Schema.Literal("thread.conversation.revert"),
 });
 
+// Restores files to before a turn and keeps the conversation. Separate for the
+// same reason: an older server must reject it rather than rewind history.
+const ThreadFilesRestoreCommand = Schema.Struct({
+  ...ThreadCheckpointRevertCommand.fields,
+  type: Schema.Literal("thread.files.restore"),
+});
+
 const ThreadSessionStopCommand = Schema.Struct({
   type: Schema.Literal("thread.session.stop"),
   commandId: CommandId,
@@ -1497,6 +1508,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadUserInputDismissCommand,
   ThreadCheckpointRevertCommand,
   ThreadConversationRevertCommand,
+  ThreadFilesRestoreCommand,
   ThreadSessionStopCommand,
 ]);
 export type DispatchableClientOrchestrationCommand =
@@ -1531,6 +1543,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadUserInputDismissCommand,
   ThreadCheckpointRevertCommand,
   ThreadConversationRevertCommand,
+  ThreadFilesRestoreCommand,
   ThreadSessionStopCommand,
 ]);
 export type ClientOrchestrationCommand = typeof ClientOrchestrationCommand.Type;
@@ -1646,6 +1659,7 @@ const ThreadTurnDiffCompleteCommand = Schema.Struct({
   status: OrchestrationCheckpointStatus,
   files: Schema.Array(OrchestrationCheckpointFile),
   assistantMessageId: Schema.optional(MessageId),
+  userMessageId: Schema.optional(MessageId),
   checkpointTurnCount: NonNegativeInt,
   createdAt: IsoDateTime,
 });
@@ -2026,6 +2040,8 @@ export const ThreadCheckpointRevertRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   turnCount: NonNegativeInt,
   restoreFiles: Schema.optional(Schema.Boolean),
+  // False restores files only; the conversation keeps every turn.
+  restoreConversation: Schema.optional(Schema.Boolean),
   createdAt: IsoDateTime,
 });
 
@@ -2058,6 +2074,7 @@ export const ThreadTurnDiffCompletedPayload = Schema.Struct({
   status: OrchestrationCheckpointStatus,
   files: Schema.Array(OrchestrationCheckpointFile),
   assistantMessageId: Schema.NullOr(MessageId),
+  userMessageId: Schema.optional(MessageId),
   completedAt: IsoDateTime,
 });
 

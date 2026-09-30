@@ -48,6 +48,12 @@ export const GetLatestProjectionThreadTaskActivityInput = Schema.Struct({
 export type GetLatestProjectionThreadTaskActivityInput =
   typeof GetLatestProjectionThreadTaskActivityInput.Type;
 
+export const ListEditedFilePathsInput = Schema.Struct({
+  threadId: ThreadId,
+  turnIds: Schema.Array(TurnId),
+});
+export type ListEditedFilePathsInput = typeof ListEditedFilePathsInput.Type;
+
 export const DeleteProjectionThreadActivitiesInput = Schema.Struct({
   threadId: ThreadId,
 });
@@ -92,6 +98,14 @@ export interface ProjectionThreadActivityRepositoryShape {
   readonly getLatestTaskActivity: (
     input: GetLatestProjectionThreadTaskActivityInput,
   ) => Effect.Effect<Option.Option<ProjectionThreadActivity>, ProjectionRepositoryError>;
+
+  /**
+   * Paths the agent's edit tools wrote during these turns. `null` marks an edit
+   * whose path was not recorded.
+   */
+  readonly listEditedFilePaths: (
+    input: ListEditedFilePathsInput,
+  ) => Effect.Effect<ReadonlyArray<string | null>, ProjectionRepositoryError>;
 
   /**
    * Delete projected thread activity rows by thread.

@@ -1826,6 +1826,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.conversation.revert":
+    case "thread.files.restore":
     case "thread.checkpoint.revert": {
       yield* requireThread({
         readModel,
@@ -1844,6 +1845,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           turnCount: command.turnCount,
           ...(command.type === "thread.conversation.revert" ? { restoreFiles: false } : {}),
+          ...(command.type === "thread.files.restore" ? { restoreConversation: false } : {}),
           createdAt: command.createdAt,
         },
       };
@@ -2145,6 +2147,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           status: command.status,
           files: command.files,
           assistantMessageId: command.assistantMessageId ?? null,
+          ...(command.userMessageId !== undefined ? { userMessageId: command.userMessageId } : {}),
           completedAt: command.completedAt,
         },
       };

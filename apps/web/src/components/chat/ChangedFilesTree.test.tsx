@@ -57,6 +57,39 @@ describe("ChangedFilesCard", () => {
     expect(markup).not.toContain("App.test.tsx");
   });
 
+  it("names the repository of each file when a turn spans several", () => {
+    const markup = renderToStaticMarkup(
+      <ChangedFilesCard
+        turnId={TurnId.make("turn-1")}
+        files={[
+          {
+            path: "src/math.js",
+            kind: "modified",
+            additions: 3,
+            deletions: 0,
+            repoRoot: "/work/repo-a",
+          },
+          {
+            path: "src/greet.py",
+            kind: "modified",
+            additions: 2,
+            deletions: 1,
+            repoRoot: "/work/repo-b",
+          },
+        ]}
+        allDirectoriesExpanded
+        resolvedTheme="light"
+        onToggleAllDirectories={() => {}}
+        onOpenTurnDiff={() => {}}
+      />,
+    );
+
+    expect(markup).toContain("repo-a/src");
+    expect(markup).toContain("repo-b/src");
+    expect(markup).toContain("math.js");
+    expect(markup).toContain("greet.py");
+  });
+
   it("keeps the folder tree visible when folders are collapsed", () => {
     const markup = renderToStaticMarkup(
       <ChangedFilesCard

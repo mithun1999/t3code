@@ -574,6 +574,8 @@ export function applyThreadDetailEvent(
 
     // ── Checkpoints / turn diffs ────────────────────────────────────
     case "thread.turn-diff-completed": {
+      const existing = thread.checkpoints.find((entry) => entry.turnId === event.payload.turnId);
+      const userMessageId = event.payload.userMessageId ?? existing?.userMessageId;
       const checkpoint: OrchestrationCheckpointSummary = {
         turnId: event.payload.turnId,
         checkpointTurnCount: event.payload.checkpointTurnCount,
@@ -581,10 +583,10 @@ export function applyThreadDetailEvent(
         status: event.payload.status,
         files: event.payload.files,
         assistantMessageId: event.payload.assistantMessageId,
+        ...(userMessageId !== undefined ? { userMessageId } : {}),
         completedAt: event.payload.completedAt,
       };
 
-      const existing = thread.checkpoints.find((entry) => entry.turnId === checkpoint.turnId);
       // Don't overwrite a non-missing checkpoint with a missing one.
       if (existing && existing.status !== "missing" && checkpoint.status === "missing") {
         return { kind: "unchanged" };
@@ -641,6 +643,7 @@ export function applyThreadDetailEvent(
         thread.messages,
         retainedTurnIds,
         event.payload.turnCount,
+        new Set(checkpoints.flatMap((entry) => entry.userMessageId ?? [])),
       );
       const proposedPlans = pipe(
         thread.proposedPlans,
@@ -835,12 +838,15 @@ function retainMessagesAfterRevert(
   messages: ReadonlyArray<OrchestrationMessage>,
   retainedTurnIds: ReadonlySet<string>,
   turnCount: number,
+  retainedUserMessageIds: ReadonlySet<string> = new Set(),
 ): OrchestrationMessage[] {
   const retainedMessageIds = new Set<string>();
   for (const message of messages) {
     if (message.role === "system" || isImportedAgentSessionMessageId(message.id)) {
       retainedMessageIds.add(message.id);
     } else if (message.turnId !== null && retainedTurnIds.has(message.turnId)) {
+      retainedMessageIds.add(message.id);
+    } else if (message.role === "user" && retainedUserMessageIds.has(message.id)) {
       retainedMessageIds.add(message.id);
     }
   }

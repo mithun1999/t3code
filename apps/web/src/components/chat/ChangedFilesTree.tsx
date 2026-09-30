@@ -23,8 +23,15 @@ import { MiddleTruncate } from "../ui/middle-truncate";
 
 const EMPTY_DIRECTORY_OVERRIDES: Record<string, boolean> = {};
 
-/** Opens the OS-level context menu for a changed file (reveal in file manager, open in editor). */
-export type ChangedFileContextMenuHandler = (filePath: string, event: MouseEvent) => void;
+/** Opens the OS-level context menu for a changed file (reveal in file manager, open in editor).
+    `repoRoot` is set when the thread spans several repositories. */
+export type ChangedFileContextMenuHandler = (
+  filePath: string,
+  event: MouseEvent,
+  repoRoot?: string,
+) => void;
+
+type OpenTurnDiff = (turnId: TurnId, filePath?: string, repoRoot?: string) => void;
 
 export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
   turnId: TurnId;
@@ -32,7 +39,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
   allDirectoriesExpanded: boolean;
   resolvedTheme: "light" | "dark";
   onToggleAllDirectories: () => void;
-  onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  onOpenTurnDiff: OpenTurnDiff;
   onFileContextMenu?: ChangedFileContextMenuHandler | undefined;
 }) {
   const {
@@ -105,7 +112,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
                   size="xs"
                   variant="ghost-muted"
                   aria-label="Open diff"
-                  onClick={() => onOpenTurnDiff(turnId, files[0]?.path)}
+                  onClick={() => onOpenTurnDiff(turnId, files[0]?.path, files[0]?.repoRoot)}
                 />
               }
             >
@@ -134,7 +141,7 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
   files: ReadonlyArray<TurnDiffFileChange>;
   allDirectoriesExpanded: boolean;
   resolvedTheme: "light" | "dark";
-  onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  onOpenTurnDiff: OpenTurnDiff;
   onFileContextMenu?: ChangedFileContextMenuHandler | undefined;
 }) {
   const {
@@ -228,12 +235,12 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
         type="button"
         className="group flex w-full items-center gap-2 rounded-md py-1.5 pr-2 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
         style={{ paddingLeft: `${leftPadding}px` }}
-        onClick={() => onOpenTurnDiff(turnId, node.path)}
+        onClick={() => onOpenTurnDiff(turnId, node.filePath, node.repoRoot)}
         onContextMenu={
           onFileContextMenu
             ? (event) => {
                 event.preventDefault();
-                onFileContextMenu(node.path, event);
+                onFileContextMenu(node.filePath, event, node.repoRoot);
               }
             : undefined
         }

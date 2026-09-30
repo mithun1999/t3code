@@ -1,4 +1,10 @@
-import { CheckpointRef, ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
+import {
+  CheckpointRef,
+  ProjectId,
+  ThreadId,
+  TurnId,
+  VcsProcessExitError,
+} from "@t3tools/contracts";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -6,7 +12,7 @@ import * as Option from "effect/Option";
 import { describe, expect } from "vite-plus/test";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { checkpointRefForThreadTurn } from "./Utils.ts";
+import { checkpointRefForThreadTurn, checkpointStartRefForThreadTurn } from "./Utils.ts";
 import * as CheckpointDiffQuery from "./CheckpointDiffQuery.ts";
 import * as CheckpointStore from "./CheckpointStore.ts";
 import { CheckpointThreadNotFoundError } from "./Errors.ts";
@@ -187,16 +193,26 @@ describe("CheckpointDiffQuery.layer", () => {
         captureCheckpoint: () => Effect.void,
         hasCheckpointRef: () => Effect.succeed(true),
         restoreCheckpoint: () => Effect.succeed(true),
-        diffCheckpoints: ({ fromCheckpointRef, toCheckpointRef, cwd, ignoreWhitespace }) =>
-          Effect.sync(() => {
-            diffCheckpointsCalls.push({
-              fromCheckpointRef,
-              toCheckpointRef,
-              cwd,
-              ignoreWhitespace,
-            });
-            return "diff patch";
-          }),
+        diffCheckpoints: ({ fromCheckpointRef, toCheckpointRef, cwd, ignoreWhitespace }) => {
+          diffCheckpointsCalls.push({
+            fromCheckpointRef,
+            toCheckpointRef,
+            cwd,
+            ignoreWhitespace,
+          });
+          // This thread predates turn start refs.
+          return fromCheckpointRef === checkpointStartRefForThreadTurn(threadId, 1)
+            ? Effect.fail(
+                new VcsProcessExitError({
+                  operation: "test",
+                  command: "git diff",
+                  cwd,
+                  exitCode: 128,
+                  detail: "bad revision",
+                }),
+              )
+            : Effect.succeed("diff patch");
+        },
         deleteCheckpointRefs: () => Effect.void,
       };
 
@@ -248,6 +264,12 @@ describe("CheckpointDiffQuery.layer", () => {
 
       const expectedFromRef = checkpointRefForThreadTurn(threadId, 0);
       expect(diffCheckpointsCalls).toEqual([
+        {
+          cwd: "/tmp/workspace",
+          fromCheckpointRef: checkpointStartRefForThreadTurn(threadId, 1),
+          toCheckpointRef,
+          ignoreWhitespace: true,
+        },
         {
           cwd: "/tmp/workspace",
           fromCheckpointRef: expectedFromRef,

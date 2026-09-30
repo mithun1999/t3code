@@ -1744,6 +1744,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (Option.isSome(existingTurn)) {
             yield* projectionTurnRepository.upsertByTurnId({
               ...existingTurn.value,
+              pendingMessageId:
+                existingTurn.value.pendingMessageId ?? event.payload.userMessageId ?? null,
               assistantMessageId: event.payload.assistantMessageId,
               state:
                 turnStillRunning || existingTurn.value.state === "interrupted"
@@ -1762,7 +1764,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionTurnRepository.upsertByTurnId({
             turnId: event.payload.turnId,
             threadId: event.payload.threadId,
-            pendingMessageId: null,
+            pendingMessageId: event.payload.userMessageId ?? null,
             sourceProposedPlanThreadId: null,
             sourceProposedPlanId: null,
             assistantMessageId: event.payload.assistantMessageId,
