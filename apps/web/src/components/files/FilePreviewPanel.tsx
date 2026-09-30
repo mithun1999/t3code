@@ -79,6 +79,7 @@ import {
 import SourceFilePreview from "./ReadOnlySourcePreview";
 import { resolveCenteredFileLineScrollTop } from "./fileLineReveal";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
+import { MonacoFileEditor } from "./monaco/MonacoFileEditor";
 import { projectFileCacheKey, projectFileEditorCacheKey } from "./fileContentRevision";
 import {
   isMarkdownPreviewFile,
@@ -936,6 +937,7 @@ export default function FilePreviewPanel({
 }: FilePreviewPanelProps) {
   const { resolvedTheme } = useTheme();
   const wordWrap = useClientSettings((settings) => settings.wordWrap);
+  const codeEditor = useClientSettings((settings) => settings.codeEditor);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const remoteOpenState = useRemoteOpenState(environmentId);
   const environmentHttpBaseUrl = useEnvironmentHttpBaseUrl(environmentId);
@@ -1286,6 +1288,21 @@ export default function FilePreviewPanel({
                 text={file.data.contents}
                 cacheKey={projectFileCacheKey(fileCwd, relativePath, file.data.contents)}
                 onPostRender={onFilePostRender}
+              />
+            ) : codeEditor === "monaco" ? (
+              <MonacoFileEditor
+                key={`${fileCwd}:${relativePath}`}
+                environmentId={environmentId}
+                cwd={fileCwd}
+                relativePath={relativePath}
+                composerDraftTarget={composerDraftTarget}
+                root={fileRoot ?? undefined}
+                contents={file.data.contents}
+                resolvedTheme={resolvedTheme}
+                revealLine={revealLine}
+                revealRequestId={revealRequestId}
+                wordWrap={wordWrap}
+                onPendingChange={onPendingChange}
               />
             ) : (
               <DiffWorkerPoolProvider>

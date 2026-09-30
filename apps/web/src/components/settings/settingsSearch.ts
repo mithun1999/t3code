@@ -342,6 +342,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["stacked split side by side unified inline view"],
   },
   {
+    id: "code-editor",
+    title: "Code editor",
+    to: "/settings/general",
+    searchTerms: ["monaco vs code vscode editor files panel classic minimap"],
+  },
+  {
     id: "proactive-panels",
     title: "Proactive panels",
     to: "/settings/general",

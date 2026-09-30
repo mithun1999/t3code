@@ -27,6 +27,13 @@ export class FileSaveCoordinator<A = unknown, E = unknown> {
     this.schedule(this.options.debounceMs);
   }
 
+  /** Save now instead of waiting out the debounce. */
+  flush(): void {
+    if (this.disposed) return;
+    this.clearTimer();
+    void this.persistLatest();
+  }
+
   dispose(): void {
     this.disposed = true;
     this.clearTimer();
