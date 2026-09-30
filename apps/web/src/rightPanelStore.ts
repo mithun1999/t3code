@@ -31,6 +31,7 @@ const RIGHT_PANEL_KINDS = [
   "agents",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
+export type FileSurfaceCompare = "working-tree" | "staged";
 
 export interface DeviceTabTarget {
   hostId: string;
@@ -64,6 +65,11 @@ export type RightPanelSurface =
       /** Present when the file lives in the thread's attachment store rather
           than at a workspace or host path. */
       attachment?: ChatFileAttachment;
+      /**
+       * Shows the file's git changes instead of the file, as VS Code's source
+       * control does: unstaged ("working-tree") or staged changes.
+       */
+      compare?: FileSurfaceCompare;
     }
   | {
       /**
@@ -137,6 +143,21 @@ interface RightPanelStoreState {
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number, root?: string) => void;
   openAttachment: (ref: ScopedThreadRef, attachment: ChatFileAttachment) => void;
+  /**
+   * Opens a file's git changes. Like VS Code's preview editors, it takes the
+   * place of the diff opened before it, so stepping through changes keeps one tab.
+   */
+  openFileDiff: (
+    ref: ScopedThreadRef,
+    relativePath: string,
+    compare: FileSurfaceCompare,
+    root?: string,
+  ) => void;
+  /** A file or folder was renamed or moved: tabs showing it (or files in it) follow. */
+  retargetFileSurfaces: (
+    ref: ScopedThreadRef,
+    move: { readonly root?: string; readonly fromPath: string; readonly toPath: string },
+  ) => void;
   openPullRequest: (
     ref: ScopedThreadRef,
     target: {
@@ -208,6 +229,19 @@ const browserSurface = (tabId: string | null): RightPanelSurface =>
  */
 export const fileSurfaceId = (relativePath: string, root?: string): `file:${string}` =>
   `file:${root ? `${root}::` : ""}${relativePath}`;
+
+/** Id for a file's git changes, apart from the file's own tab. */
+export const fileDiffSurfaceId = (
+  relativePath: string,
+  compare: FileSurfaceCompare,
+  root?: string,
+): `file:${string}` => `file:${compare}::diff::${root ? `${root}::` : ""}${relativePath}`;
+
+/** The path a file surface shows after `fromPath` moved to `toPath`, if it is affected. */
+export function movedSurfacePath(path: string, fromPath: string, toPath: string): string | null {
+  if (path === fromPath) return toPath;
+  return path.startsWith(`${fromPath}/`) ? `${toPath}${path.slice(fromPath.length)}` : null;
+}
 
 const fileSurface = (
   relativePath: string,
@@ -570,6 +604,64 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             return upsertSurface({ ...current, surfaces: withoutPlaceholder }, surface);
           }),
         ),
+      openFileDiff: (ref, relativePath, compare, root) =>
+        set((state) =>
+          userAction(state, scopedThreadKey(ref), (current) => {
+            const surface: RightPanelSurface = {
+              id: fileDiffSurfaceId(relativePath, compare, root),
+              kind: "file",
+              relativePath,
+              ...(root ? { root } : {}),
+              revealLine: null,
+              revealRequestId: 0,
+              compare,
+            };
+            const surfaces = current.surfaces.filter((entry) => entry.kind !== "files");
+            const existingIndex = surfaces.findIndex((entry) => entry.id === surface.id);
+            if (existingIndex >= 0) {
+              return { isOpen: true, activeSurfaceId: surface.id, surfaces };
+            }
+            // Replace the diff that is showing, if any, in its place.
+            const active = surfaces.find((entry) => entry.id === current.activeSurfaceId);
+            const previewIndex =
+              active?.kind === "file" && active.compare
+                ? surfaces.indexOf(active)
+                : surfaces.findLastIndex((entry) => entry.kind === "file" && entry.compare);
+            const next =
+              previewIndex >= 0
+                ? surfaces.map((entry, index) => (index === previewIndex ? surface : entry))
+                : [...surfaces, surface];
+            return { isOpen: true, activeSurfaceId: surface.id, surfaces: next };
+          }),
+        ),
+      retargetFileSurfaces: (ref, move) =>
+        set((state) => {
+          const threadKey = scopedThreadKey(ref);
+          const current = state.byThreadKey[threadKey];
+          if (!current) return state;
+          let activeSurfaceId = current.activeSurfaceId;
+          let changed = false;
+          const surfaces = current.surfaces.map((surface) => {
+            if (surface.kind !== "file" || surface.attachment || surface.root !== move.root) {
+              return surface;
+            }
+            const relativePath = movedSurfacePath(surface.relativePath, move.fromPath, move.toPath);
+            if (relativePath === null) return surface;
+            changed = true;
+            const id = surface.compare
+              ? fileDiffSurfaceId(relativePath, surface.compare, surface.root)
+              : fileSurfaceId(relativePath, surface.root);
+            if (surface.id === activeSurfaceId) activeSurfaceId = id;
+            return { ...surface, id, relativePath };
+          });
+          if (!changed) return state;
+          return {
+            byThreadKey: {
+              ...state.byThreadKey,
+              [threadKey]: { ...current, activeSurfaceId, surfaces },
+            },
+          };
+        }),
       openPullRequest: (ref, target) =>
         set((state) =>
           userAction(state, scopedThreadKey(ref), (current) => {

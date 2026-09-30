@@ -176,6 +176,26 @@ import {
   ProjectWriteFileResult,
 } from "./project.ts";
 import {
+  ScmCommitInput,
+  ScmCommitResult,
+  ScmError,
+  ScmPathsInput,
+  ScmReadFileInput,
+  ScmReadFileResult,
+  ScmStatusInput,
+  ScmStatusResult,
+  WorkspaceChangeEvent,
+  WorkspaceCopyEntryInput,
+  WorkspaceCreateEntryInput,
+  WorkspaceDeleteEntriesInput,
+  WorkspaceDeleteEntriesResult,
+  WorkspaceEntryOperationError,
+  WorkspaceEntryResult,
+  WorkspaceMoveEntryInput,
+  WorkspaceWatchError,
+  WorkspaceWatchInput,
+} from "./workspaceIde.ts";
+import {
   TerminalAttachInput,
   TerminalAttachStreamEvent,
   TerminalClearInput,
@@ -293,6 +313,18 @@ export const WS_METHODS = {
   projectsSearchContents: "projects.searchContents",
   projectsSearchEntries: "projects.searchEntries",
   projectsWriteFile: "projects.writeFile",
+
+  // Explorer and source control (VS Code-style views)
+  workspaceCreateEntry: "workspace.createEntry",
+  workspaceMoveEntry: "workspace.moveEntry",
+  workspaceCopyEntry: "workspace.copyEntry",
+  workspaceDeleteEntries: "workspace.deleteEntries",
+  scmStatus: "scm.status",
+  scmStage: "scm.stage",
+  scmUnstage: "scm.unstage",
+  scmDiscard: "scm.discard",
+  scmCommit: "scm.commit",
+  scmReadFile: "scm.readFile",
 
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
@@ -443,6 +475,7 @@ export const WS_METHODS = {
 
   // Streaming subscriptions
   subscribeVcsStatus: "subscribeVcsStatus",
+  subscribeWorkspaceChanges: "subscribeWorkspaceChanges",
   subscribeWorktreeSetup: "subscribeWorktreeSetup",
   worktreeSetupCancel: "worktreeSetup.cancel",
   subscribeTerminalEvents: "subscribeTerminalEvents",
@@ -965,6 +998,70 @@ const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
   payload: ProjectWriteFileInput,
   success: ProjectWriteFileResult,
   error: Schema.Union([ProjectWriteFileError, EnvironmentAuthorizationError]),
+});
+
+const WsWorkspaceCreateEntryRpc = Rpc.make(WS_METHODS.workspaceCreateEntry, {
+  payload: WorkspaceCreateEntryInput,
+  success: WorkspaceEntryResult,
+  error: Schema.Union([WorkspaceEntryOperationError, EnvironmentAuthorizationError]),
+});
+
+const WsWorkspaceMoveEntryRpc = Rpc.make(WS_METHODS.workspaceMoveEntry, {
+  payload: WorkspaceMoveEntryInput,
+  success: WorkspaceEntryResult,
+  error: Schema.Union([WorkspaceEntryOperationError, EnvironmentAuthorizationError]),
+});
+
+const WsWorkspaceCopyEntryRpc = Rpc.make(WS_METHODS.workspaceCopyEntry, {
+  payload: WorkspaceCopyEntryInput,
+  success: WorkspaceEntryResult,
+  error: Schema.Union([WorkspaceEntryOperationError, EnvironmentAuthorizationError]),
+});
+
+const WsWorkspaceDeleteEntriesRpc = Rpc.make(WS_METHODS.workspaceDeleteEntries, {
+  payload: WorkspaceDeleteEntriesInput,
+  success: WorkspaceDeleteEntriesResult,
+  error: Schema.Union([WorkspaceEntryOperationError, EnvironmentAuthorizationError]),
+});
+
+const WsSubscribeWorkspaceChangesRpc = Rpc.make(WS_METHODS.subscribeWorkspaceChanges, {
+  payload: WorkspaceWatchInput,
+  success: WorkspaceChangeEvent,
+  error: Schema.Union([WorkspaceWatchError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+const WsScmStatusRpc = Rpc.make(WS_METHODS.scmStatus, {
+  payload: ScmStatusInput,
+  success: ScmStatusResult,
+  error: Schema.Union([ScmError, EnvironmentAuthorizationError]),
+});
+
+const WsScmStageRpc = Rpc.make(WS_METHODS.scmStage, {
+  payload: ScmPathsInput,
+  error: Schema.Union([ScmError, EnvironmentAuthorizationError]),
+});
+
+const WsScmUnstageRpc = Rpc.make(WS_METHODS.scmUnstage, {
+  payload: ScmPathsInput,
+  error: Schema.Union([ScmError, EnvironmentAuthorizationError]),
+});
+
+const WsScmDiscardRpc = Rpc.make(WS_METHODS.scmDiscard, {
+  payload: ScmPathsInput,
+  error: Schema.Union([ScmError, EnvironmentAuthorizationError]),
+});
+
+const WsScmCommitRpc = Rpc.make(WS_METHODS.scmCommit, {
+  payload: ScmCommitInput,
+  success: ScmCommitResult,
+  error: Schema.Union([ScmError, EnvironmentAuthorizationError]),
+});
+
+const WsScmReadFileRpc = Rpc.make(WS_METHODS.scmReadFile, {
+  payload: ScmReadFileInput,
+  success: ScmReadFileResult,
+  error: Schema.Union([ScmError, EnvironmentAuthorizationError]),
 });
 
 const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
@@ -1499,6 +1596,17 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsSearchContentsRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsWriteFileRpc,
+  WsWorkspaceCreateEntryRpc,
+  WsWorkspaceMoveEntryRpc,
+  WsWorkspaceCopyEntryRpc,
+  WsWorkspaceDeleteEntriesRpc,
+  WsSubscribeWorkspaceChangesRpc,
+  WsScmStatusRpc,
+  WsScmStageRpc,
+  WsScmUnstageRpc,
+  WsScmDiscardRpc,
+  WsScmCommitRpc,
+  WsScmReadFileRpc,
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,
   WsAgentSessionsScanRpc,

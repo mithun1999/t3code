@@ -1,24 +1,25 @@
 import type * as Monaco from "monaco-editor/editor/editor.api.js";
 import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { Spinner } from "~/components/ui/spinner";
 import type { DraftId } from "~/composerDraftStore";
-import { clampCodeFontSize, cssFontFamilies, DEFAULT_CODE_FONT_STACK } from "~/appearanceFonts";
 import { useClientSettings } from "~/hooks/useSettings";
 import { resolvePathLinkTarget } from "~/terminal-links";
 
 import { fileContentRevision } from "../fileContentRevision";
 import { setProjectFileQueryData } from "../projectFilesQueryState";
-import { useFileSaveCoordinator } from "../useFileSaveCoordinator";
+import { type FileSaveHooks, useFileSaveCoordinator } from "../useFileSaveCoordinator";
+import { DiskConflictBanner } from "./DiskConflictBanner";
 import {
   acquireFileModel,
-  applyExternalContents,
   type CachedFileModel,
   rememberLocalRevision,
   releaseFileModel,
 } from "./monacoModels";
-import { loadMonacoRuntime, type MonacoRuntime } from "./monacoRuntime";
+import { fontOptions, useMonacoRuntime } from "./monacoEditorShared";
+import type { MonacoRuntime } from "./monacoRuntime";
+import { type DiskFile, useDiskSync } from "./useDiskSync";
 import { useMonacoReviewComments } from "./useMonacoReviewComments";
 
 export interface MonacoFileEditorProps {
@@ -29,6 +30,10 @@ export interface MonacoFileEditorProps {
   /** Owning repo root, forwarded to onPendingChange so the surface id matches. */
   readonly root?: string | undefined;
   readonly contents: string;
+  /** The file as last read from disk, for merging others' changes and safe saves. */
+  readonly disk: DiskFile | null;
+  /** Re-reads the file, e.g. after a save found it changed on disk. */
+  readonly onRefreshDisk: () => void;
   readonly resolvedTheme: "light" | "dark";
   readonly revealLine: number | null;
   readonly revealRequestId: number;
@@ -54,34 +59,17 @@ const EDITOR_OPTIONS: Monaco.editor.IStandaloneEditorConstructionOptions = {
   stickyScroll: { enabled: true },
 };
 
-function fontOptions(family: string, size: number): Monaco.editor.IEditorOptions {
-  const fontSize = clampCodeFontSize(size);
-  const custom = cssFontFamilies(family);
-  return {
-    fontFamily: custom ? `${custom}, ${DEFAULT_CODE_FONT_STACK}` : DEFAULT_CODE_FONT_STACK,
-    fontSize,
-    lineHeight: Math.round(fontSize * 1.5),
-    fontLigatures: true,
-  };
-}
+/**
+ * Editors already disposed, with where they were scrolled to. Their models
+ * must not be touched again, but the model keeps the view state for next time.
+ */
+const disposedEditors = new WeakMap<
+  Monaco.editor.IStandaloneCodeEditor,
+  Monaco.editor.ICodeEditorViewState | null
+>();
 
 export function MonacoFileEditor(props: MonacoFileEditorProps) {
-  const [runtime, setRuntime] = useState<MonacoRuntime | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    loadMonacoRuntime().then(
-      (loaded) => {
-        if (!cancelled) setRuntime(loaded);
-      },
-      (error: unknown) => {
-        if (!cancelled) setLoadError(error instanceof Error ? error.message : String(error));
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const { runtime, loadError } = useMonacoRuntime();
 
   if (loadError) {
     return (
@@ -108,6 +96,8 @@ function MonacoFileEditorSurface({
   composerDraftTarget,
   root,
   contents,
+  disk,
+  onRefreshDisk,
   resolvedTheme,
   revealLine,
   revealRequestId,
@@ -120,12 +110,14 @@ function MonacoFileEditorSurface({
   const [entry, setEntry] = useState<CachedFileModel | null>(null);
   const fontFamilyCode = useClientSettings((settings) => settings.fontFamilyCode);
   const fontSizeCode = useClientSettings((settings) => settings.fontSizeCode);
+  const saveHooksRef = useRef<FileSaveHooks | null>(null);
   const saveCoordinator = useFileSaveCoordinator({
     environmentId,
     cwd,
     relativePath,
     root,
     onPendingChange,
+    hooks: saveHooksRef,
   });
   const contentsRef = useRef(contents);
   useLayoutEffect(() => {
@@ -147,6 +139,7 @@ function MonacoFileEditorSurface({
     });
     setEditor(instance);
     return () => {
+      disposedEditors.set(instance, instance.saveViewState());
       instance.dispose();
       setEditor(null);
     };
@@ -172,9 +165,14 @@ function MonacoFileEditorSurface({
     return () => {
       cancelled = true;
       if (acquired) {
-        const viewState = editor.saveViewState();
-        editor.setModel(null);
-        releaseFileModel(acquired, viewState);
+        // On unmount the editor is disposed first; keep the view state it had.
+        if (disposedEditors.has(editor)) {
+          releaseFileModel(acquired, disposedEditors.get(editor) ?? acquired.viewState);
+        } else {
+          const viewState = editor.saveViewState();
+          editor.setModel(null);
+          releaseFileModel(acquired, viewState);
+        }
       }
       setEntry(null);
     };
@@ -195,18 +193,24 @@ function MonacoFileEditorSurface({
     return () => subscription.dispose();
   }, [cwd, entry, environmentId, relativePath, saveCoordinator]);
 
-  // An agent (or anyone else) changed the file: merge it in as one undoable edit.
-  useEffect(() => {
-    if (!entry || entry.model.getValue() === contents) return;
-    if (entry.localRevisions.has(fileContentRevision(contents))) return;
-    applyingExternalRef.current = true;
-    try {
-      applyExternalContents(entry.model, contents);
-    } finally {
-      applyingExternalRef.current = false;
-    }
-    entry.localRevisions.clear();
-  }, [contents, entry]);
+  const saveLocal = useCallback(
+    (value: string) => {
+      if (entry) rememberLocalRevision(entry, fileContentRevision(value));
+      setProjectFileQueryData(environmentId, cwd, relativePath, value);
+      saveCoordinator.change(value);
+    },
+    [cwd, entry, environmentId, relativePath, saveCoordinator],
+  );
+  // An agent (or anyone else) changed the file: merge it in as one undoable
+  // edit, keeping unsaved typing; clashing edits pause saving and ask.
+  const { conflict, keepMine, useDiskVersion } = useDiskSync({
+    entry,
+    disk,
+    saveHooksRef,
+    applyingExternalRef,
+    saveLocal,
+    refreshDisk: onRefreshDisk,
+  });
 
   // The side panel is often narrow; show the minimap only when there is room.
   useEffect(() => {
@@ -282,9 +286,12 @@ function MonacoFileEditorSurface({
   });
 
   return (
-    <div className="relative flex min-h-0 flex-1" data-monaco-file-editor>
-      <div ref={containerRef} className="min-h-0 min-w-0 flex-1" />
-      {commentPortals}
+    <div className="flex min-h-0 flex-1 flex-col">
+      {conflict ? <DiskConflictBanner onKeepMine={keepMine} onUseDisk={useDiskVersion} /> : null}
+      <div className="relative flex min-h-0 flex-1" data-monaco-file-editor>
+        <div ref={containerRef} className="min-h-0 min-w-0 flex-1" />
+        {commentPortals}
+      </div>
     </div>
   );
 }

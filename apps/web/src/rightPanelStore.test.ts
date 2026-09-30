@@ -3,7 +3,9 @@ import { type EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import {
+  fileDiffSurfaceId,
   migratePersistedRightPanelState,
+  movedSurfacePath,
   pullRequestSurface,
   pullRequestSurfaceId,
   selectActiveRightPanel,
@@ -473,6 +475,37 @@ describe("rightPanelStore", () => {
         },
       ],
     });
+  });
+
+  it("opens diffs as one preview tab that the next diff replaces", () => {
+    const store = useRightPanelStore.getState();
+    store.openFile(refA, "src/index.ts");
+    store.openFileDiff(refA, "src/a.ts", "working-tree");
+    store.openFileDiff(refA, "src/b.ts", "staged");
+
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.activeSurfaceId).toBe(fileDiffSurfaceId("src/b.ts", "staged"));
+    expect(state.surfaces).toMatchObject([
+      { id: "file:src/index.ts", relativePath: "src/index.ts" },
+      { relativePath: "src/b.ts", compare: "staged" },
+    ]);
+    expect(fileDiffSurfaceId("src/b.ts", "staged")).not.toBe("file:src/b.ts");
+  });
+
+  it("moves open tabs along with a renamed file or folder", () => {
+    const store = useRightPanelStore.getState();
+    store.openFile(refA, "src/lib/a.ts");
+    store.openFileDiff(refA, "src/lib/b.ts", "working-tree");
+    store.openFile(refA, "src/other.ts");
+    store.retargetFileSurfaces(refA, { fromPath: "src/lib", toPath: "src/util" });
+
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces.map((surface) => surface.id)).toEqual([
+      "file:src/util/a.ts",
+      fileDiffSurfaceId("src/util/b.ts", "working-tree"),
+      "file:src/other.ts",
+    ]);
+    expect(movedSurfacePath("src/libs/x.ts", "src/lib", "src/util")).toBeNull();
   });
 
   it.each([

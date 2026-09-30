@@ -15,6 +15,11 @@ export interface CachedFileModel {
    * a render late, so they must not be mistaken for someone else's change.
    */
   readonly localRevisions: Set<string>;
+  /**
+   * The disk contents and revision the model's edits are based on. Kept with
+   * the model so a reopened tab still knows what it last agreed with.
+   */
+  synced: { readonly contents: string; readonly revision?: string | undefined } | null;
   lastUsedAt: number;
 }
 
@@ -52,6 +57,7 @@ export function acquireFileModel(
     model: monaco.editor.createModel(input.contents, input.language, uri),
     viewState: null,
     localRevisions: new Set(),
+    synced: null,
     lastUsedAt: Date.now(),
   };
   cache.set(input.key, entry);
@@ -81,6 +87,11 @@ export function rememberLocalRevision(entry: CachedFileModel, revision: string):
     const oldest = entry.localRevisions.values().next().value;
     if (oldest !== undefined) entry.localRevisions.delete(oldest);
   }
+}
+
+/** Records the disk state the model's edits are now based on. */
+export function markSynced(entry: CachedFileModel, synced: CachedFileModel["synced"]): void {
+  entry.synced = synced;
 }
 
 /**

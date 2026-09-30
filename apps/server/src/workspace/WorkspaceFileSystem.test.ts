@@ -3,10 +3,12 @@ import * as NodeChildProcess from "node:child_process";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, describe, expect } from "@effect/vitest";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Schedule from "effect/Schedule";
 
 import * as ServerConfig from "../config.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
@@ -74,6 +76,9 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
           contents: "export const answer = 42;\n",
           byteLength: 26,
           truncated: false,
+          revision: WorkspaceFileSystem.fileRevision(
+            new TextEncoder().encode("export const answer = 42;\n"),
+          ),
         });
       }),
     );
@@ -97,7 +102,21 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
           contents: "# Report\n",
           byteLength: 9,
           truncated: false,
+          revision: WorkspaceFileSystem.fileRevision(new TextEncoder().encode("# Report\n")),
         });
+      }),
+    );
+
+    it.effect("omits the revision of a truncated read", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "large.txt", "a".repeat(1024 * 1024 + 1));
+
+        const result = yield* workspaceFileSystem.readFile({ cwd, relativePath: "large.txt" });
+
+        expect(result.truncated).toBe(true);
+        expect(result.revision).toBeUndefined();
       }),
     );
 
@@ -264,7 +283,10 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
           .readFileString(path.join(cwd, "plans/effect-rpc.md"))
           .pipe(Effect.orDie);
 
-        expect(result).toEqual({ relativePath: "plans/effect-rpc.md" });
+        expect(result).toEqual({
+          relativePath: "plans/effect-rpc.md",
+          revision: WorkspaceFileSystem.fileRevision(new TextEncoder().encode("# Plan\n")),
+        });
         expect(saved).toBe("# Plan\n");
       }),
     );
@@ -303,11 +325,159 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
           contents: "# Plan\n",
         });
 
-        const afterWrite = yield* workspaceEntries.list({ cwd });
-        expect(afterWrite.entries).toEqual(
-          expect.arrayContaining([expect.objectContaining({ path: "plans/effect-rpc.md" })]),
+        // The refresh runs in the background, so the save doesn't wait on a rescan.
+        const afterWrite = yield* workspaceEntries.list({ cwd }).pipe(
+          Effect.filterOrFail(
+            (result) => result.entries.some((entry) => entry.path === "plans/effect-rpc.md"),
+            () => "search index not refreshed yet",
+          ),
+          Effect.retry({ times: 100, schedule: Schedule.spaced(Duration.millis(20)) }),
         );
         expect(afterWrite.truncated).toBe(false);
+      }),
+    );
+
+    it.effect("writes when the expected revision matches the file on disk", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "src/index.ts", "export const a = 1;\n");
+
+        const read = yield* workspaceFileSystem.readFile({ cwd, relativePath: "src/index.ts" });
+        const written = yield* workspaceFileSystem.writeFile({
+          cwd,
+          relativePath: "src/index.ts",
+          contents: "export const a = 2;\n",
+          ...(read.revision === undefined ? {} : { expectedRevision: read.revision }),
+        });
+        const reread = yield* workspaceFileSystem.readFile({ cwd, relativePath: "src/index.ts" });
+
+        expect(read.revision).toBeDefined();
+        expect(written.revision).toBe(reread.revision);
+        expect(written.revision).not.toBe(read.revision);
+        expect(
+          yield* fileSystem.readFileString(path.join(cwd, "src/index.ts")).pipe(Effect.orDie),
+        ).toBe("export const a = 2;\n");
+      }),
+    );
+
+    it.effect("rejects a write whose expected revision is stale", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "notes.md", "first\n");
+        const read = yield* workspaceFileSystem.readFile({ cwd, relativePath: "notes.md" });
+        yield* writeTextFile(cwd, "notes.md", "changed by an agent\n");
+
+        const error = yield* workspaceFileSystem
+          .writeFile({
+            cwd,
+            relativePath: "notes.md",
+            contents: "mine\n",
+            expectedRevision: read.revision ?? "",
+          })
+          .pipe(Effect.flip);
+
+        expect(error).toBeInstanceOf(WorkspaceFileSystem.WorkspaceFileRevisionConflictError);
+        expect(error).toMatchObject({
+          expectedRevision: read.revision,
+          actualRevision: WorkspaceFileSystem.fileRevision(
+            new TextEncoder().encode("changed by an agent\n"),
+          ),
+        });
+        expect(
+          yield* fileSystem.readFileString(path.join(cwd, "notes.md")).pipe(Effect.orDie),
+        ).toBe("changed by an agent\n");
+      }),
+    );
+
+    it.effect("recreates a file deleted since it was read", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "notes.md", "first\n");
+        const read = yield* workspaceFileSystem.readFile({ cwd, relativePath: "notes.md" });
+        yield* fileSystem.remove(path.join(cwd, "notes.md"));
+
+        yield* workspaceFileSystem.writeFile({
+          cwd,
+          relativePath: "notes.md",
+          contents: "again\n",
+          expectedRevision: read.revision ?? "",
+        });
+
+        expect(
+          yield* fileSystem.readFileString(path.join(cwd, "notes.md")).pipe(Effect.orDie),
+        ).toBe("again\n");
+      }),
+    );
+
+    // Windows has no POSIX permission bits to keep.
+    it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
+      "keeps the mode of the file it replaces",
+      () =>
+        Effect.gen(function* () {
+          const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const cwd = yield* makeTempDir;
+          const scriptPath = path.join(cwd, "run.sh");
+          yield* writeTextFile(cwd, "run.sh", "#!/bin/sh\n");
+          yield* fileSystem.chmod(scriptPath, 0o755);
+
+          yield* workspaceFileSystem.writeFile({
+            cwd,
+            relativePath: "run.sh",
+            contents: "#!/bin/sh\necho hi\n",
+          });
+          const stat = yield* fileSystem.stat(scriptPath);
+
+          expect(stat.mode & 0o777).toBe(0o755);
+          expect(yield* fileSystem.readDirectory(cwd)).toEqual(["run.sh"]);
+        }),
+    );
+
+    it.effect.skipIf(!symlinksSupported)(
+      "rejects writes through a symlinked folder that leaves the workspace root",
+      () =>
+        Effect.gen(function* () {
+          const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const cwd = yield* makeTempDir;
+          const outsideDir = yield* makeTempDir;
+          yield* fileSystem.symlink(outsideDir, path.join(cwd, "linked"));
+
+          const error = yield* workspaceFileSystem
+            .writeFile({ cwd, relativePath: "linked/nested/escape.md", contents: "# nope\n" })
+            .pipe(Effect.flip);
+
+          expect(error).toBeInstanceOf(WorkspaceFileSystem.WorkspaceFilePathEscapeError);
+          expect(yield* fileSystem.readDirectory(outsideDir)).toEqual([]);
+        }),
+    );
+
+    it.effect.skipIf(!symlinksSupported)("saves through a symlinked file inside the root", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "docs/real.md", "old\n");
+        yield* fileSystem.symlink(path.join(cwd, "docs/real.md"), path.join(cwd, "alias.md"));
+
+        yield* workspaceFileSystem.writeFile({ cwd, relativePath: "alias.md", contents: "new\n" });
+
+        expect(
+          yield* fileSystem.readFileString(path.join(cwd, "docs/real.md")).pipe(Effect.orDie),
+        ).toBe("new\n");
+        expect((yield* fileSystem.readLink(path.join(cwd, "alias.md"))).length).toBeGreaterThan(0);
       }),
     );
 
