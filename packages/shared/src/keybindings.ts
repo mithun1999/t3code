@@ -20,8 +20,8 @@ type WhenToken =
 
 export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+b", command: "sidebar.toggle" },
-  { key: "mod+[", command: "navigation.back", when: "!terminalFocus" },
-  { key: "mod+]", command: "navigation.forward", when: "!terminalFocus" },
+  { key: "mod+[", command: "navigation.back", when: "!terminalFocus && !codeEditorFocus" },
+  { key: "mod+]", command: "navigation.forward", when: "!terminalFocus && !codeEditorFocus" },
   { key: "mod+j", command: "terminal.toggle" },
   { key: "mod+alt+b", command: "rightPanel.toggle" },
   { key: "mod+d", command: "terminal.split", when: "terminalFocus" },
@@ -29,7 +29,7 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+n", command: "terminal.new", when: "terminalFocus" },
   { key: "mod+w", command: "terminal.close", when: "terminalFocus" },
   { key: "mod+w", command: "rightPanel.close", when: "!terminalFocus" },
-  { key: "mod+d", command: "diff.toggle", when: "!terminalFocus" },
+  { key: "mod+d", command: "diff.toggle", when: "!terminalFocus && !codeEditorFocus" },
   { key: "mod+shift+j", command: "preview.toggle" },
   { key: "mod+r", command: "preview.refresh", when: "previewFocus" },
   { key: "mod+l", command: "preview.focusUrl", when: "previewFocus" },
@@ -37,15 +37,19 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod++", command: "preview.zoomIn", when: "previewFocus" },
   { key: "mod+-", command: "preview.zoomOut", when: "previewFocus" },
   { key: "mod+0", command: "preview.resetZoom", when: "previewFocus" },
-  { key: "mod+k", command: "commandPalette.toggle", when: "!terminalFocus" },
+  { key: "mod+k", command: "commandPalette.toggle", when: "!terminalFocus && !codeEditorFocus" },
   { key: "mod+p", command: "filePicker.toggle", when: "!terminalFocus" },
   { key: "mod+shift+f", command: "projectSearch.toggle", when: "!terminalFocus" },
-  { key: "mod+u", command: "usage.open", when: "!terminalFocus" },
+  { key: "mod+u", command: "usage.open", when: "!terminalFocus && !codeEditorFocus" },
   { key: "mod+alt+a", command: "theme.select", when: "!terminalFocus" },
   { key: "mod+alt+shift+a", command: "appearance.cycle", when: "!terminalFocus" },
   { key: "mod+alt+shift+t", command: "themeEditor.toggle" },
-  { key: "mod+s", command: "composer.stash", when: "!terminalFocus" },
-  { key: "mod+shift+enter", command: "thread.steerQueuedMessage", when: "!terminalFocus" },
+  { key: "mod+s", command: "composer.stash", when: "!terminalFocus && !codeEditorFocus" },
+  {
+    key: "mod+shift+enter",
+    command: "thread.steerQueuedMessage",
+    when: "!terminalFocus && !codeEditorFocus",
+  },
   { key: "mod+n", command: "chat.new", when: "!terminalFocus" },
   { key: "mod+shift+o", command: "chat.new", when: "!terminalFocus" },
   { key: "mod+shift+n", command: "chat.newLocal", when: "!terminalFocus" },
@@ -55,8 +59,16 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+a", command: "composer.mode", when: "!terminalFocus" },
   { key: "mod+shift+x", command: "composer.workspace", when: "!terminalFocus" },
   { key: "mod+shift+g", command: "composer.branch", when: "!terminalFocus" },
-  { key: "mod+shift+l", command: "composer.previousWorktree", when: "!terminalFocus" },
-  { key: "mod+shift+k", command: "pullRequest.copyNumber", when: "!terminalFocus" },
+  {
+    key: "mod+shift+l",
+    command: "composer.previousWorktree",
+    when: "!terminalFocus && !codeEditorFocus",
+  },
+  {
+    key: "mod+shift+k",
+    command: "pullRequest.copyNumber",
+    when: "!terminalFocus && !codeEditorFocus",
+  },
   { key: "mod+shift+arrowup", command: "modelPicker.previousProvider", when: "modelPickerOpen" },
   { key: "mod+shift+arrowdown", command: "modelPicker.nextProvider", when: "modelPickerOpen" },
   { key: "mod+o", command: "editor.openFavorite" },
@@ -64,7 +76,7 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+]", command: "thread.next" },
   { key: "mod+shift+c", command: "thread.copyReference", when: "!terminalFocus" },
   { key: "mod+shift+s", command: "thread.settle", when: "!terminalFocus" },
-  { key: "mod+shift+p", command: "thread.pin", when: "!terminalFocus" },
+  { key: "mod+shift+p", command: "thread.pin", when: "!terminalFocus && !codeEditorFocus" },
   { key: "mod+z", command: "thread.undo", when: "!terminalFocus && !editableFocus" },
   ...THREAD_JUMP_KEYBINDING_COMMANDS.map((command, index) => ({
     key: `mod+${index + 1}`,
@@ -320,6 +332,46 @@ export function compileResolvedKeybindingsConfig(
     }
   }
   return compiled.slice(-MAX_KEYBINDINGS_COUNT);
+}
+
+/**
+ * Chords VS Code's code editor also uses. They stopped applying while a code
+ * editor has focus; a config still holding the earlier default is upgraded.
+ */
+const CODE_EDITOR_YIELDING_COMMANDS = new Set<KeybindingRule["command"]>([
+  "navigation.back",
+  "navigation.forward",
+  "diff.toggle",
+  "commandPalette.toggle",
+  "usage.open",
+  "composer.stash",
+  "thread.steerQueuedMessage",
+  "composer.previousWorktree",
+  "pullRequest.copyNumber",
+  "thread.pin",
+]);
+
+/**
+ * Replaces rules that are exactly an earlier default with today's default.
+ * Rules the user changed are kept as they are. Returns the input when nothing
+ * was upgraded.
+ */
+export function upgradeSupersededDefaultKeybindings(
+  rules: ReadonlyArray<KeybindingRule>,
+): ReadonlyArray<KeybindingRule> {
+  let changed = false;
+  const upgraded = rules.map((rule) => {
+    if (!CODE_EDITOR_YIELDING_COMMANDS.has(rule.command) || rule.when !== "!terminalFocus") {
+      return rule;
+    }
+    const current = DEFAULT_KEYBINDINGS.find(
+      (candidate) => candidate.command === rule.command && candidate.key === rule.key,
+    );
+    if (!current || current.when === rule.when) return rule;
+    changed = true;
+    return current;
+  });
+  return changed ? upgraded : rules;
 }
 
 export const DEFAULT_RESOLVED_KEYBINDINGS = compileResolvedKeybindingsConfig(DEFAULT_KEYBINDINGS);

@@ -9,6 +9,7 @@ import {
   type ThreadJumpKeybindingCommand,
 } from "@t3tools/contracts";
 import { isElectron } from "./env";
+import { isCodeEditorFocused } from "./lib/editableFocus";
 import { isMacPlatform } from "./lib/utils";
 
 export interface ShortcutEventLike {
@@ -39,6 +40,8 @@ export interface ShortcutMatchContext {
   /** A text field, textarea, select or rich-text editor owns the keyboard.
       Optional: only chords that collide with native editing consult it. */
   editableFocus?: boolean;
+  /** A code editor owns the keyboard; chords VS Code's editor uses yield to it. */
+  codeEditorFocus?: boolean;
   [key: string]: boolean;
 }
 
@@ -153,6 +156,7 @@ function resolveContext(options: ShortcutMatchOptions | undefined): ShortcutMatc
     isWeb: !isElectron,
     isDesktop: isElectron,
     editableFocus: false,
+    codeEditorFocus: typeof document === "undefined" ? false : isCodeEditorFocused(),
     ...options?.context,
   };
 }

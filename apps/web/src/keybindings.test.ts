@@ -766,6 +766,49 @@ describe("chat/editor shortcuts", () => {
   });
 });
 
+describe("code editor focus", () => {
+  it("lets VS Code's editor chords reach a focused code editor", () => {
+    const inEditor = { platform: "MacIntel", context: { codeEditorFocus: true } };
+    for (const key of ["d", "[", "]", "k", "s", "u"]) {
+      assert.isNull(
+        resolveShortcutCommand(
+          event({ key, metaKey: true }),
+          DEFAULT_RESOLVED_KEYBINDINGS,
+          inEditor,
+        ),
+        `mod+${key}`,
+      );
+    }
+    for (const key of ["k", "l", "p"]) {
+      assert.isNull(
+        resolveShortcutCommand(
+          event({ key, metaKey: true, shiftKey: true }),
+          DEFAULT_RESOLVED_KEYBINDINGS,
+          inEditor,
+        ),
+        `mod+shift+${key}`,
+      );
+    }
+  });
+
+  it("keeps the app's own chords, and those chords outside the editor", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "p", metaKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "MacIntel",
+        context: { codeEditorFocus: true },
+      }),
+      "filePicker.toggle",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "d", metaKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "MacIntel",
+        context: { codeEditorFocus: false },
+      }),
+      "diff.toggle",
+    );
+  });
+});
+
 describe("cross-command precedence", () => {
   it("uses when + order so a later focused rule overrides a global rule", () => {
     const keybindings = compile([

@@ -49,6 +49,14 @@ changes (⌥F5 and ⇧⌥F5), switch between side-by-side and inline, or collaps
 unchanged regions. The working tree side is editable and saves like any file;
 the arrows between the sides revert a change.
 
+## Keyboard
+
+Files and diffs open in VS Code's editor, with its keyboard shortcuts: ⌘D adds
+the next match, ⇧⌘L selects every match, ⌥↑ and ⌥↓ move lines, ⇧⌘K deletes a
+line, ⌘/ comments, ⌘[ and ⌘] indent, ⌘F finds and ⌥⌘F replaces. ⌥Z toggles word
+wrap and ⇧⌘P (or F1) opens the editor's command palette. While the editor has the
+keyboard, these win over the app's shortcuts that share their keys.
+
 ## Edits from agents
 
 When an agent changes a file you have open, the change appears in the editor

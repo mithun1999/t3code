@@ -1,9 +1,10 @@
 import type * as Monaco from "monaco-editor/editor/editor.api.js";
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { clampCodeFontSize, cssFontFamilies, DEFAULT_CODE_FONT_STACK } from "~/appearanceFonts";
+import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
 
-import { loadMonacoRuntime, type MonacoRuntime } from "./monacoRuntime";
+import { type MonacoApi, loadMonacoRuntime, type MonacoRuntime } from "./monacoRuntime";
 
 /** The app's code font, with VS Code's line height and ligatures. */
 export function fontOptions(family: string, size: number): Monaco.editor.IEditorOptions {
@@ -39,4 +40,39 @@ export function useMonacoRuntime(): {
     };
   }, []);
   return { runtime, loadError };
+}
+
+/**
+ * VS Code keys that live in its workbench rather than its editor: ⌥Z toggles
+ * word wrap (the app-wide setting) and ⇧⌘P opens the editor's command palette.
+ */
+export function useWorkbenchEditorKeys(
+  monaco: MonacoApi,
+  editors: ReadonlyArray<Monaco.editor.IStandaloneCodeEditor>,
+): void {
+  const wordWrap = useClientSettings((settings) => settings.wordWrap);
+  const updateClientSettings = useUpdateClientSettings();
+  const toggleWordWrapRef = useRef(() => updateClientSettings({ wordWrap: !wordWrap }));
+  useLayoutEffect(() => {
+    toggleWordWrapRef.current = () => updateClientSettings({ wordWrap: !wordWrap });
+  });
+  useEffect(() => {
+    const actions = editors.flatMap((editor) => [
+      editor.addAction({
+        id: "t3.toggleWordWrap",
+        label: "View: Toggle Word Wrap",
+        keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.KeyZ],
+        run: () => toggleWordWrapRef.current(),
+      }),
+      editor.addAction({
+        id: "t3.showAllCommands",
+        label: "Show All Commands",
+        keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyP],
+        run: (target) => target.trigger("keyboard", "editor.action.quickCommand", null),
+      }),
+    ]);
+    return () => {
+      for (const action of actions) action.dispose();
+    };
+  }, [editors, monaco]);
 }

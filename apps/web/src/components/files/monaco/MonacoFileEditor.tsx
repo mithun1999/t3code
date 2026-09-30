@@ -17,7 +17,7 @@ import {
   rememberLocalRevision,
   releaseFileModel,
 } from "./monacoModels";
-import { fontOptions, useMonacoRuntime } from "./monacoEditorShared";
+import { fontOptions, useMonacoRuntime, useWorkbenchEditorKeys } from "./monacoEditorShared";
 import type { MonacoRuntime } from "./monacoRuntime";
 import { type DiskFile, useDiskSync } from "./useDiskSync";
 import { useMonacoReviewComments } from "./useMonacoReviewComments";
@@ -225,6 +225,9 @@ function MonacoFileEditorSurface({
     const subscription = editor.onDidLayoutChange(fitMinimap);
     return () => subscription.dispose();
   }, [editor, monaco]);
+
+  const keyedEditors = useMemo(() => (editor ? [editor] : []), [editor]);
+  useWorkbenchEditorKeys(monaco, keyedEditors);
 
   // Cmd+S saves now rather than after the autosave pause.
   useEffect(() => {

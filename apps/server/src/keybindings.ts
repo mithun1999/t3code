@@ -45,6 +45,7 @@ import { writeFileStringAtomically } from "./atomicWrite.ts";
 import { fromJsonStringPretty, fromLenientJson } from "@t3tools/shared/schemaJson";
 import {
   DEFAULT_KEYBINDINGS,
+  upgradeSupersededDefaultKeybindings,
   mergeWithDefaultKeybindings,
   compileResolvedKeybindingRule,
   compileResolvedKeybindingsConfig,
@@ -469,7 +470,9 @@ const make = Effect.gen(function* () {
         yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
         return;
       }
-      const customConfig = runtimeConfig.keybindings;
+      // Rules still exactly an earlier default follow the new default.
+      const customConfig = upgradeSupersededDefaultKeybindings(runtimeConfig.keybindings);
+      const upgradedDefaults = customConfig !== runtimeConfig.keybindings;
       const existingCommands = new Set(customConfig.map((entry) => entry.command));
       const missingDefaults: KeybindingRule[] = [];
       const shortcutConflictWarnings: Array<{
@@ -507,6 +510,7 @@ const make = Effect.gen(function* () {
         });
       }
       if (missingDefaults.length === 0) {
+        if (upgradedDefaults) yield* writeConfigAtomically(customConfig);
         yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
         return;
       }
@@ -536,6 +540,7 @@ const make = Effect.gen(function* () {
         });
       }
       if (defaultsToAppend.length === 0) {
+        if (upgradedDefaults) yield* writeConfigAtomically(customConfig);
         yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
         return;
       }
