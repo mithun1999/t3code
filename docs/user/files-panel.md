@@ -4,6 +4,10 @@ The Files panel works like VS Code's window: an activity bar on the left picks
 the side bar view, and the file or diff you open fills the rest. Choose the
 active view's icon again to hide the side bar.
 
+While the panel has the keyboard, VS Code's view keys work: ⌘B hides or shows
+the side bar, ⇧⌘E shows the Explorer and ⌃⇧G shows Source Control. Elsewhere
+those keys keep their usual meaning (⌘B still toggles the thread sidebar).
+
 ## Explorer
 
 The explorer lists your workspace. In a multi-repo workspace each repository is

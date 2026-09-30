@@ -15,8 +15,15 @@ import { shortcutKeyFromEvent } from "../../keybindings";
 import { isMacPlatform } from "../../lib/utils";
 import { METRIC_OPTIONS, WINDOW_OPTIONS } from "../usage/usageShortcuts";
 
+// One fixed order for every Usage command, "Open" included, so sorting never
+// depends on where a binding sits in the config.
 const usageCommandOrder = new Map<KeybindingCommand, number>(
-  [...METRIC_OPTIONS, ...WINDOW_OPTIONS].map((option, index) => [option.command, index]),
+  [
+    METRIC_OPTIONS[0].command,
+    "usage.open" as const,
+    ...METRIC_OPTIONS.slice(1).map((option) => option.command),
+    ...WINDOW_OPTIONS.map((option) => option.command),
+  ].map((command, index) => [command, index]),
 );
 
 function compareUsageCommands(left: KeybindingCommand, right: KeybindingCommand): number | null {
@@ -298,6 +305,10 @@ export function buildKeybindingCommandOptions(
 
 export function commandLabel(command: KeybindingCommand): string {
   if (command === "thread.copyReference") return "Pull Request: Copy Link or Thread ID";
+  // VS Code's names for the Files panel's view commands.
+  if (command === "files.toggleSideBar") return "View: Toggle Files Side Bar";
+  if (command === "files.showExplorer") return "View: Show Explorer";
+  if (command === "files.showSourceControl") return "View: Show Source Control";
   const usageMetric = METRIC_OPTIONS.find((option) => option.command === command);
   if (usageMetric) return `Usage: ${usageMetric.label}`;
   const usagePeriod = WINDOW_OPTIONS.find((option) => option.command === command);

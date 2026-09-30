@@ -85,10 +85,10 @@ Join modifiers and a key with `+`, such as `mod+shift+d` or `ctrl+l`.
 
 Available context keys are `terminalFocus`, `terminalOpen`, `previewFocus`,
 `previewOpen`, `modelPickerOpen`, `usagePageOpen`, `editableFocus`, `codeEditorFocus`,
-`isWeb`, and `isDesktop`.
+`filesPanelFocus`, `isWeb`, and `isDesktop`.
 `editableFocus` is true while a text field, the composer, or another editor has
 the keyboard. `codeEditorFocus` is true while a file or diff in the Files panel
-has the keyboard. `isWeb` is true in a browser tab. `isDesktop` is true in the
+has the keyboard, and `filesPanelFocus` while anything in the Files panel does. `isWeb` is true in a browser tab. `isDesktop` is true in the
 desktop app. Unknown keys evaluate to `false`.
 
 `mod+1` through `mod+9` jump to the first nine threads, and to models while the

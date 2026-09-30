@@ -11,6 +11,8 @@ export const SIDE_BAR_DEFAULT_WIDTH = 300;
 
 function ActivityBarButton(props: {
   label: string;
+  tooltip?: string;
+  hint?: string | undefined;
   active: boolean;
   onPress: () => void;
   badge?: number;
@@ -40,7 +42,10 @@ function ActivityBarButton(props: {
           </span>
         ) : null}
       </TooltipTrigger>
-      <TooltipPopup side="right">{props.label}</TooltipPopup>
+      <TooltipPopup side="right">
+        <div>{props.tooltip ?? props.label}</div>
+        {props.hint ? <div className="text-muted-foreground">{props.hint}</div> : null}
+      </TooltipPopup>
     </Tooltip>
   );
 }
@@ -50,8 +55,16 @@ export function WorkbenchActivityBar(props: {
   view: WorkbenchSideBarView;
   sideBarVisible: boolean;
   changeCount: number;
+  shortcutLabels?: {
+    readonly explorer: string | null;
+    readonly scm: string | null;
+    readonly toggle: string | null;
+  };
   onSelect: (view: WorkbenchSideBarView) => void;
 }) {
+  const withKey = (label: string, key: string | null | undefined) =>
+    key ? `${label} (${key})` : label;
+  const toggleHint = props.shortcutLabels?.toggle;
   return (
     <nav
       aria-label="Views"
@@ -60,6 +73,8 @@ export function WorkbenchActivityBar(props: {
     >
       <ActivityBarButton
         label="Explorer"
+        tooltip={withKey("Explorer", props.shortcutLabels?.explorer)}
+        hint={toggleHint ? `${toggleHint} hides or shows the side bar` : undefined}
         active={props.sideBarVisible && props.view === "explorer"}
         onPress={() => props.onSelect("explorer")}
       >
@@ -67,6 +82,8 @@ export function WorkbenchActivityBar(props: {
       </ActivityBarButton>
       <ActivityBarButton
         label="Source Control"
+        tooltip={withKey("Source Control", props.shortcutLabels?.scm)}
+        hint={toggleHint ? `${toggleHint} hides or shows the side bar` : undefined}
         active={props.sideBarVisible && props.view === "scm"}
         onPress={() => props.onSelect("scm")}
         badge={props.changeCount}

@@ -809,6 +809,34 @@ describe("code editor focus", () => {
   });
 });
 
+describe("Files panel view keys", () => {
+  const resolve = (init: Parameters<typeof event>[0], filesPanelFocus: boolean) =>
+    resolveShortcutCommand(event(init), DEFAULT_RESOLVED_KEYBINDINGS, {
+      platform: "MacIntel",
+      context: { filesPanelFocus },
+    });
+
+  it("uses VS Code's keys while the Files panel has focus", () => {
+    assert.strictEqual(resolve({ key: "b", metaKey: true }, true), "files.toggleSideBar");
+    assert.strictEqual(
+      resolve({ key: "e", metaKey: true, shiftKey: true }, true),
+      "files.showExplorer",
+    );
+    assert.strictEqual(
+      resolve({ key: "g", ctrlKey: true, shiftKey: true }, true),
+      "files.showSourceControl",
+    );
+  });
+
+  it("leaves the app's meaning of those keys everywhere else", () => {
+    assert.strictEqual(resolve({ key: "b", metaKey: true }, false), "sidebar.toggle");
+    assert.strictEqual(
+      resolve({ key: "e", metaKey: true, shiftKey: true }, false),
+      "composer.effort",
+    );
+  });
+});
+
 describe("cross-command precedence", () => {
   it("uses when + order so a later focused rule overrides a global rule", () => {
     const keybindings = compile([

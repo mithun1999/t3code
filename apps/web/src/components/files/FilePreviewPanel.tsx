@@ -23,13 +23,14 @@ import {
 import { mediaFileReference } from "@t3tools/client-runtime/media-reference";
 import { Code2, Eye, Globe2, Table2, WrapTextIcon } from "lucide-react";
 import * as Schema from "effect/Schema";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { isBrowserPreviewFile, openFileInPreview } from "~/browser/openFileInPreview";
 import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
 import { OpenInPicker } from "~/components/chat/OpenInPicker";
 import { MediaVideoPlayer } from "~/components/media/MediaVideoPlayer";
 import { MediaActions, type MediaActionSource } from "~/components/media/MediaActions";
+import { resolveShortcutCommand, shortcutLabelForCommand } from "~/keybindings";
 import { useRemoteOpenState } from "~/remoteOpen";
 import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
@@ -937,6 +938,30 @@ function initialExplorerOpen(): boolean {
   }
 }
 
+/** Puts the keyboard in the open editor, or on the panel when there is none. */
+function focusWorkbenchEditor(root: HTMLElement | null): void {
+  if (!root) return;
+  const input = root.querySelector<HTMLElement>(
+    ".monaco-editor .native-edit-context, .monaco-editor textarea",
+  );
+  (input ?? root).focus();
+}
+
+/** Moves the keyboard to a side bar view once it has rendered. */
+function focusWorkbenchSideBar(root: HTMLElement | null, view: WorkbenchSideBarView): void {
+  requestAnimationFrame(() => {
+    if (!root) return;
+    // The tree's rows live in its shadow root; its roving row takes focus.
+    const tree = root.querySelector("file-tree-container")?.shadowRoot;
+    const target =
+      view === "scm"
+        ? root.querySelector<HTMLElement>("[data-source-control-panel] textarea")
+        : (tree?.querySelector<HTMLElement>('button[data-type="item"][tabindex="0"]') ??
+          tree?.querySelector<HTMLElement>('button[data-type="item"]'));
+    (target ?? root).focus();
+  });
+}
+
 export default function FilePreviewPanel({
   environmentId,
   cwd,
@@ -1140,6 +1165,53 @@ export default function FilePreviewPanel({
     if (!explorerOpen) setSideBarOpen(true);
   };
 
+  // VS Code's view keys while the panel has focus: ⌘B hides or shows the side
+  // bar, ⇧⌘E and ⌃⇧G bring up the Explorer and Source Control.
+  const workbenchRef = useRef<HTMLDivElement>(null);
+  const viewKeysRef = useRef<(event: KeyboardEvent) => void>(() => {});
+  useLayoutEffect(() => {
+    viewKeysRef.current = (event) => {
+      if (event.defaultPrevented || !workbenchAvailable) return;
+      const command = resolveShortcutCommand(event, keybindings);
+      if (
+        command !== "files.toggleSideBar" &&
+        command !== "files.showExplorer" &&
+        command !== "files.showSourceControl"
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      const root = workbenchRef.current;
+      if (command === "files.toggleSideBar") {
+        // With nothing open the side bar is all there is.
+        if (previewPath === null) return;
+        const hiding = showSideBar;
+        setSideBarOpen(!hiding);
+        // Keep the keyboard in the panel so ⌘B brings the side bar back.
+        if (hiding) focusWorkbenchEditor(root);
+        return;
+      }
+      const view: WorkbenchSideBarView = command === "files.showExplorer" ? "explorer" : "scm";
+      setSideBarView(view);
+      if (!explorerOpen) setSideBarOpen(true);
+      focusWorkbenchSideBar(root, view);
+    };
+  });
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => viewKeysRef.current(event);
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, []);
+  const viewShortcutLabels = useMemo(() => {
+    const options = { context: { filesPanelFocus: true } };
+    return {
+      explorer: shortcutLabelForCommand(keybindings, "files.showExplorer", options),
+      scm: shortcutLabelForCommand(keybindings, "files.showSourceControl", options),
+      toggle: shortcutLabelForCommand(keybindings, "files.toggleSideBar", options),
+    };
+  }, [keybindings]);
+
   // The server watches the workspace, so an agent's edit reaches the open file
   // as soon as it lands rather than when its tool call finishes.
   useWorkspaceChanges(
@@ -1176,12 +1248,18 @@ export default function FilePreviewPanel({
   }, [absolutePath, createAssetUrl, fileCwd, environmentHttpBaseUrl, openPreview, threadRef]);
 
   return (
-    <div className="flex min-h-0 flex-1 overflow-hidden bg-background" data-file-workbench>
+    <div
+      ref={workbenchRef}
+      tabIndex={-1}
+      className="flex min-h-0 flex-1 overflow-hidden bg-background outline-none"
+      data-file-workbench
+    >
       {workbenchAvailable ? (
         <WorkbenchActivityBar
           view={sideBarView}
           sideBarVisible={showSideBar}
           changeCount={scmChanges}
+          shortcutLabels={viewShortcutLabels}
           onSelect={selectSideBarView}
         />
       ) : null}
