@@ -78,6 +78,7 @@ const searchWorkspaceEntries = (input: {
   query: string;
   limit: number;
   kind?: "file" | "directory";
+  ranking?: "vscode";
 }) =>
   Effect.gen(function* () {
     const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
@@ -361,6 +362,33 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceEntries", (it) => {
         expect(result.entries[0]?.kind).toBe("file");
         expect(["src/index.ts", "src/internal.ts"]).toContain(result.entries[0]?.path);
         expect(result.truncated).toBe(true);
+      }),
+    );
+
+    it.effect("ranks files as VS Code's quick open does when asked to", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDir({ prefix: "t3code-workspace-vscode-rank-" });
+        yield* writeTextFile(cwd, "src/mywindow.ts");
+        yield* writeTextFile(cwd, "src/windowActions.ts");
+        yield* writeTextFile(cwd, "lib/window.ts");
+        yield* writeTextFile(cwd, "docs/wind-ow.md");
+        yield* writeTextFile(cwd, "node_modules/pkg/window.ts");
+
+        const result = yield* searchWorkspaceEntries({
+          cwd,
+          query: "window",
+          limit: 10,
+          kind: "file",
+          ranking: "vscode",
+        });
+
+        expect(result.entries.map((entry) => entry.path)).toEqual([
+          "lib/window.ts",
+          "src/windowActions.ts",
+          "src/mywindow.ts",
+          "docs/wind-ow.md",
+        ]);
+        expect(result.truncated).toBe(false);
       }),
     );
 

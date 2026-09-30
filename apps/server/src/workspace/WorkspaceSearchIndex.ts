@@ -11,6 +11,7 @@ import type {
   Result,
   SearchResult,
 } from "@ff-labs/fff-node";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -40,6 +41,7 @@ const WORKSPACE_INDEX_SCAN_TIMEOUT = "15 seconds";
 const WORKSPACE_INDEX_SCAN_TIMEOUT_MS = 15_000;
 const WORKSPACE_INDEX_IDLE_TTL = "15 minutes";
 const CONTENT_SEARCH_TIME_BUDGET_MS = 250;
+const WORKSPACE_FILES_CACHE_MS = 2_000;
 const CONTENT_SEARCH_MAX_MATCHES_PER_FILE = 100;
 
 export class WorkspaceSearchIndexCreateFailed extends Schema.TaggedError<WorkspaceSearchIndexCreateFailed>()(
@@ -111,6 +113,11 @@ export class WorkspaceSearchIndex extends Context.Service<
   WorkspaceSearchIndex,
   {
     readonly list: () => Effect.Effect<ProjectListEntriesResult, WorkspaceSearchIndexSearchFailed>;
+    /** Every indexed file's root-relative path, cached briefly for search-as-you-type. */
+    readonly files: () => Effect.Effect<
+      { readonly paths: ReadonlyArray<string>; readonly truncated: boolean },
+      WorkspaceSearchIndexSearchFailed
+    >;
     readonly search: (
       query: string,
       limit: number,
@@ -404,9 +411,32 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
     return result.value;
   });
 
+  // Typing in ⌘P scores every file on each keystroke; one listing serves a burst.
+  let filesCache: {
+    readonly at: number;
+    readonly value: { readonly paths: ReadonlyArray<string>; readonly truncated: boolean };
+  } | null = null;
+  const files: WorkspaceSearchIndex["Service"]["files"] = Effect.fn("WorkspaceSearchIndex.files")(
+    function* () {
+      const now = yield* Clock.currentTimeMillis;
+      if (filesCache && now - filesCache.at < WORKSPACE_FILES_CACHE_MS) return filesCache.value;
+      const result = yield* runSearch("", WORKSPACE_INDEX_PAGE_SIZE, "fileSearch", () =>
+        finder.fileSearch("", { pageSize: WORKSPACE_INDEX_PAGE_SIZE }),
+      );
+      const mapped = mapFileSearchResult(result, WORKSPACE_INDEX_MAX_ENTRIES);
+      const value = {
+        paths: mapped.entries.map((entry) => entry.path),
+        truncated: mapped.truncated,
+      };
+      filesCache = { at: now, value };
+      return value;
+    },
+  );
+
   const refresh: WorkspaceSearchIndex["Service"]["refresh"] = Effect.fn(
     "WorkspaceSearchIndex.refresh",
   )(function* () {
+    filesCache = null;
     const result = yield* Effect.try({
       try: () => finder.scanFiles(),
       catch: (cause) =>
@@ -524,7 +554,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
     };
   });
 
-  return WorkspaceSearchIndex.of({ list, refresh, search, searchContents });
+  return WorkspaceSearchIndex.of({ files, list, refresh, search, searchContents });
 });
 
 export const WORKSPACE_SEARCH_INDEX_VARIANTS = ["paths", "content"] as const;

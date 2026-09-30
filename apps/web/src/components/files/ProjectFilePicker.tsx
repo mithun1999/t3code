@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { extractLineFromQuery } from "@t3tools/shared/fuzzyScorer";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 
 import { useActiveProjectTarget, type ActiveProjectTarget } from "~/hooks/useActiveProjectTarget";
 import { useTheme } from "~/hooks/useTheme";
@@ -11,9 +12,11 @@ import { CommandPaletteContent } from "../CommandPaletteContent";
 import { type CommandPaletteActionItem } from "../CommandPalette.logic";
 import { CommandPaletteResults } from "../CommandPaletteResults";
 import {
-  getProjectFilePickerMatches,
+  buildFilePickerRows,
+  type FilePickerRow,
   PROJECT_FILE_PICKER_RESULT_LIMIT,
 } from "./ProjectFilePicker.logic";
+import { readRecentFiles } from "./recentFiles";
 import { useProjectFilePickerQuery } from "./projectFilesQueryState";
 
 interface ProjectFilePickerProps {
@@ -72,48 +75,71 @@ function OpenProjectFilePicker(props: ProjectFilePickerProps & { target: ActiveP
   const { target } = props;
   const [query, setQuery] = useState("");
   const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(null);
+  // "app.ts:42" searches for app.ts and opens it at line 42, as in VS Code.
+  const lineTarget = extractLineFromQuery(query);
+  const fileQuery = lineTarget?.filter ?? query;
   const result = useProjectFilePickerQuery(
     target.environmentId,
     target.cwd,
-    query,
+    fileQuery,
     PROJECT_FILE_PICKER_RESULT_LIMIT,
+    { ranking: "vscode" },
   );
   const { resolvedTheme } = useTheme();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const matches = useMemo(
-    () => getProjectFilePickerMatches(result.entries, result.matchedQuery),
-    [result.entries, result.matchedQuery],
+  // Read once per opening, like VS Code's editor history.
+  const [recentPaths] = useState(() => readRecentFiles(target.environmentId, target.cwd));
+  const rows = useMemo(
+    () =>
+      buildFilePickerRows({
+        query: result.matchedQuery,
+        recentPaths,
+        entries: result.entries,
+      }),
+    [recentPaths, result.entries, result.matchedQuery],
   );
   const hasMatchedQuery = /\S/.test(result.matchedQuery);
-  const items = useMemo<CommandPaletteActionItem[]>(
+  const line = lineTarget?.line;
+  const toItem = useCallback(
+    (row: FilePickerRow): CommandPaletteActionItem => ({
+      kind: "action",
+      value: `file:${row.path}`,
+      searchTerms: [row.name, row.path],
+      title: (
+        <HighlightedFuzzyText
+          active={hasMatchedQuery}
+          value={row.name}
+          indices={row.nameMatchIndices}
+        />
+      ),
+      ...(row.folder
+        ? {
+            description: (
+              <HighlightedFuzzyText
+                active={hasMatchedQuery}
+                value={row.folder}
+                indices={row.folderMatchIndices}
+              />
+            ),
+          }
+        : {}),
+      icon: <PierreEntryIcon pathValue={row.path} kind="file" theme={resolvedTheme} />,
+      run: async () => {
+        useRightPanelStore.getState().openFile(target.threadRef, row.path, line);
+      },
+    }),
+    [hasMatchedQuery, line, resolvedTheme, target.threadRef],
+  );
+  const groups = useMemo(
     () =>
-      matches.map((match) => ({
-        kind: "action",
-        value: `file:${match.path}`,
-        searchTerms: [match.name, match.path],
-        title: (
-          <HighlightedFuzzyText
-            active={hasMatchedQuery}
-            value={match.name}
-            indices={match.nameMatchIndices}
-          />
-        ),
-        description: (
-          <HighlightedFuzzyText
-            active={hasMatchedQuery}
-            value={match.path}
-            indices={match.pathMatchIndices}
-          />
-        ),
-        icon: <PierreEntryIcon pathValue={match.path} kind="file" theme={resolvedTheme} />,
-        run: async () => {
-          useRightPanelStore.getState().openFile(target.threadRef, match.path);
-        },
-      })),
-    [hasMatchedQuery, matches, resolvedTheme, target.threadRef],
+      [
+        { value: "recently-opened", label: "Recently opened", items: rows.recent.map(toItem) },
+        { value: "project-files", label: target.projectName, items: rows.files.map(toItem) },
+      ].filter((group) => group.items.length > 0),
+    [rows, target.projectName, toItem],
   );
 
-  const emptyStateMessage = getEmptyStateMessage(query, result.error, result.isPending);
+  const emptyStateMessage = getEmptyStateMessage(fileQuery, result.error, result.isPending);
 
   return (
     <CommandPaletteContent
@@ -121,7 +147,7 @@ function OpenProjectFilePicker(props: ProjectFilePickerProps & { target: ActiveP
       autoHighlight="always"
       escapeLabel="Back"
       footerActionLabel="Open file"
-      inputProps={{ placeholder: "Search files…" }}
+      inputProps={{ placeholder: "Search files by name (append :line to go to a line)…" }}
       mode="none"
       onItemHighlighted={(value) => {
         setHighlightedItemValue(typeof value === "string" ? value : null);
@@ -135,9 +161,7 @@ function OpenProjectFilePicker(props: ProjectFilePickerProps & { target: ActiveP
       value={query}
     >
       <CommandPaletteResults
-        groups={
-          items.length > 0 ? [{ value: "project-files", label: target.projectName, items }] : []
-        }
+        groups={groups}
         highlightedItemValue={highlightedItemValue}
         isActionsOnly={false}
         keybindings={keybindings}

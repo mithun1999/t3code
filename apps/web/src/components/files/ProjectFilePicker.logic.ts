@@ -1,4 +1,12 @@
 import type { ProjectEntry } from "@t3tools/contracts";
+import {
+  compareItemsByFuzzyScore,
+  type FuzzyMatch,
+  type ItemScore,
+  prepareQuery,
+  type ScorableItem,
+  scoreItemFuzzy,
+} from "@t3tools/shared/fuzzyScorer";
 import { normalizeSearchQuery } from "@t3tools/shared/searchRanking";
 
 export const PROJECT_FILE_PICKER_RESULT_LIMIT = 200;
@@ -70,4 +78,83 @@ export function getProjectFilePickerMatches(
   }
 
   return matches;
+}
+
+/** A ⌘P row as VS Code shows it: the file name, then its folder. */
+export interface FilePickerRow {
+  readonly path: string;
+  readonly name: string;
+  readonly nameMatchIndices: ReadonlyArray<number>;
+  readonly folder: string;
+  readonly folderMatchIndices: ReadonlyArray<number>;
+}
+
+export interface FilePickerRows {
+  /** Recently opened files that match, VS Code's "recently opened" group. */
+  readonly recent: ReadonlyArray<FilePickerRow>;
+  /** The rest of the matches, in the server's (VS Code) order. */
+  readonly files: ReadonlyArray<FilePickerRow>;
+}
+
+function pickerItem(path: string): ScorableItem {
+  const slash = path.lastIndexOf("/");
+  return {
+    label: path.slice(slash + 1),
+    description: slash < 0 ? undefined : path.slice(0, slash),
+  };
+}
+
+function matchIndices(matches: ReadonlyArray<FuzzyMatch> | undefined): number[] {
+  return (matches ?? []).flatMap((match) =>
+    Array.from({ length: match.end - match.start }, (_, offset) => match.start + offset),
+  );
+}
+
+function pickerRow(path: string, item: ScorableItem, score: ItemScore | null): FilePickerRow {
+  return {
+    path,
+    name: item.label,
+    nameMatchIndices: matchIndices(score?.labelMatch),
+    folder: item.description ?? "",
+    folderMatchIndices: matchIndices(score?.descriptionMatch),
+  };
+}
+
+/**
+ * VS Code's ⌘P list: recently opened files that match come first, ordered by
+ * VS Code's scorer (newest first with no query), then every other match.
+ */
+export function buildFilePickerRows(input: {
+  readonly query: string;
+  readonly recentPaths: ReadonlyArray<string>;
+  readonly entries: ReadonlyArray<ProjectEntry>;
+  readonly limit?: number;
+}): FilePickerRows {
+  const limit = input.limit ?? PROJECT_FILE_PICKER_RESULT_LIMIT;
+  const trimmed = input.query.trim();
+  const query = trimmed ? prepareQuery(trimmed) : null;
+  const scoreOf = (item: ScorableItem) => (query ? scoreItemFuzzy(item, query, true) : null);
+
+  const recentScored = input.recentPaths.flatMap((path) => {
+    const item = pickerItem(path);
+    const score = scoreOf(item);
+    return score && score.score === 0 ? [] : [{ path, item, score }];
+  });
+  if (query) {
+    recentScored.sort((left, right) =>
+      compareItemsByFuzzyScore(left.item, right.item, left.score!, right.score!, query),
+    );
+  }
+  const recent = recentScored
+    .slice(0, limit)
+    .map(({ path, item, score }) => pickerRow(path, item, score));
+  const shown = new Set(recent.map((row) => row.path));
+  const files = input.entries
+    .filter((entry) => entry.kind === "file" && !shown.has(entry.path))
+    .slice(0, Math.max(0, limit - recent.length))
+    .map((entry) => {
+      const item = pickerItem(entry.path);
+      return pickerRow(entry.path, item, scoreOf(item));
+    });
+  return { recent, files };
 }

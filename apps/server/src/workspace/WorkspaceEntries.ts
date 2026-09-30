@@ -21,6 +21,14 @@ import type {
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { isExplicitRelativePath, isWindowsAbsolutePath } from "@t3tools/shared/path";
+import {
+  compareItemsByFuzzyScore,
+  type ItemScore,
+  prepareQuery,
+  type ScorableItem,
+  scoreItemFuzzy,
+} from "@t3tools/shared/fuzzyScorer";
+import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
 import { normalizeSearchQuery } from "@t3tools/shared/searchRanking";
 
 import { expandHomePathWith } from "../pathExpansion.ts";
@@ -123,6 +131,17 @@ function isIgnoredDirectoryName(name: string): boolean {
 }
 
 /** Whether any segment of a relative posix path is an ignored directory. */
+/** Whether `needle`'s characters appear in `haystack` in order (both lower case). */
+function containsInOrder(haystack: string, needle: string): boolean {
+  let index = 0;
+  for (const character of needle) {
+    index = haystack.indexOf(character === "\\" ? "/" : character, index);
+    if (index < 0) return false;
+    index += 1;
+  }
+  return true;
+}
+
 function isInIgnoredDirectory(relativePath: string): boolean {
   return relativePath.split("/").some(isIgnoredDirectoryName);
 }
@@ -332,9 +351,76 @@ export const make = Effect.gen(function* () {
     },
   );
 
+  /**
+   * ⌘P as VS Code ranks it: every indexed file is scored with VS Code's
+   * quick-open scorer (name, folder and camelCase-aware, no typo tolerance)
+   * and the best `limit` come back in VS Code's order.
+   */
+  const searchFilesLikeVsCode = Effect.fn("WorkspaceEntries.searchFilesLikeVsCode")(function* (
+    roots: ReadonlyArray<{ readonly normalized: string; readonly tag: string | undefined }>,
+    rawQuery: string,
+    limit: number,
+    imageOnly: boolean,
+  ) {
+    const query = prepareQuery(rawQuery);
+    const pieces = (query.values ?? [query]).map((piece) => piece.normalizedLowercase);
+    const scored: Array<{ entry: ProjectEntry; item: ScorableItem; score: ItemScore }> = [];
+    let truncated = false;
+    for (const root of roots) {
+      const listing = yield* Effect.gen(function* () {
+        const searchIndex = yield* WorkspaceSearchIndex.WorkspaceSearchIndex;
+        return yield* searchIndex.files();
+      }).pipe(
+        Effect.provide(
+          workspaceSearchIndexes.get(
+            WorkspaceSearchIndex.workspaceSearchIndexKey(root.normalized, "paths"),
+          ),
+        ),
+      );
+      truncated = truncated || listing.truncated;
+      for (const relativePath of listing.paths) {
+        if (isInIgnoredDirectory(relativePath)) continue;
+        if (imageOnly && !isWorkspaceImagePreviewPath(relativePath)) continue;
+        const absolutePath = `${root.normalized}/${relativePath}`;
+        // Cheap check first: every piece's characters must appear in order.
+        const lowerPath = absolutePath.toLowerCase();
+        if (!pieces.every((piece) => containsInOrder(lowerPath, piece))) continue;
+        const slash = relativePath.lastIndexOf("/");
+        const item: ScorableItem = {
+          label: relativePath.slice(slash + 1),
+          description: slash < 0 ? undefined : relativePath.slice(0, slash),
+          path: absolutePath,
+        };
+        const score = scoreItemFuzzy(item, query, true);
+        if (score.score > 0) {
+          scored.push({
+            entry: withRoot({ path: relativePath, kind: "file" }, root.tag),
+            item,
+            score,
+          });
+        }
+      }
+    }
+    scored.sort((left, right) =>
+      compareItemsByFuzzyScore(left.item, right.item, left.score, right.score, query),
+    );
+    return {
+      entries: scored.slice(0, limit).map(({ entry }) => entry),
+      truncated: truncated || scored.length > limit,
+    };
+  });
+
   const search: WorkspaceEntries["Service"]["search"] = Effect.fn("WorkspaceEntries.search")(
     function* (input) {
       const roots = yield* resolveEffectiveRoots(input);
+      if (input.ranking === "vscode" && input.kind === "file" && input.query.trim()) {
+        return yield* searchFilesLikeVsCode(
+          roots,
+          input.query.trim(),
+          Math.max(0, Math.floor(input.limit)),
+          input.imageOnly === true,
+        );
+      }
       const normalizedQuery = normalizeSearchQuery(input.query, {
         trimLeadingPattern: /^[@./]+/,
       });

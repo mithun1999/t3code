@@ -1,6 +1,6 @@
-import { assert, describe, it } from "vite-plus/test";
+import { assert, describe, expect, it } from "vite-plus/test";
 
-import { getProjectFilePickerMatches } from "./ProjectFilePicker.logic";
+import { buildFilePickerRows, getProjectFilePickerMatches } from "./ProjectFilePicker.logic";
 
 function pathsForQuery(entries: Parameters<typeof getProjectFilePickerMatches>[0], query: string) {
   return getProjectFilePickerMatches(entries, query).map(({ name, path }) => ({ name, path }));
@@ -79,5 +79,34 @@ describe("getProjectFilePickerMatches", () => {
         ?.pathMatchIndices,
       [0, 1, 2],
     );
+  });
+});
+
+describe("buildFilePickerRows", () => {
+  const entries = [
+    { path: "src/app.ts", kind: "file" as const },
+    { path: "src/main.ts", kind: "file" as const },
+    { path: "docs/app-notes.md", kind: "file" as const },
+  ];
+
+  it("lists recently opened files first, newest first, when there is no query", () => {
+    const rows = buildFilePickerRows({ query: "", recentPaths: ["src/main.ts"], entries });
+    expect(rows.recent.map((row) => row.path)).toEqual(["src/main.ts"]);
+    expect(rows.files.map((row) => row.path)).toEqual(["src/app.ts", "docs/app-notes.md"]);
+  });
+
+  it("keeps only recent files that match, ranked by VS Code's scorer", () => {
+    const rows = buildFilePickerRows({
+      query: "app",
+      recentPaths: ["docs/app-notes.md", "src/main.ts", "src/app.ts"],
+      entries,
+    });
+    expect(rows.recent.map((row) => row.path)).toEqual(["src/app.ts", "docs/app-notes.md"]);
+    expect(rows.files.map((row) => row.path)).toEqual(["src/main.ts"]);
+    expect(rows.recent[0]).toMatchObject({
+      name: "app.ts",
+      folder: "src",
+      nameMatchIndices: [0, 1, 2],
+    });
   });
 });

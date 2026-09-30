@@ -65,6 +65,16 @@ changes (⌥F5 and ⇧⌥F5), switch between side-by-side and inline, or collaps
 unchanged regions. The working tree side is editable and saves like any file;
 the arrows between the sides revert a change.
 
+## Go to file (⌘P)
+
+⌘P finds files the way VS Code's quick open does, using a port of VS Code's
+own ranking. Type any letters of the name in order (`btn` finds `Button.tsx`); a
+name that starts with what you typed comes first, then name matches, then
+matches that need the folder. Include a `/` to match on the folder too
+(`src/comp/button`), or separate words with spaces to require each one.
+Files you opened recently are listed first, under **Recently opened**.
+Add `:42` to open the file at line 42 (`app.ts:42`).
+
 ## Keyboard
 
 Files and diffs open in VS Code's editor, with its keyboard shortcuts: ⌘D adds
