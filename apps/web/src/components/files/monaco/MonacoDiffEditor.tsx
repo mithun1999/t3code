@@ -26,8 +26,8 @@ export interface MonacoDiffEditorProps {
   /** Repository root the path is relative to. */
   readonly cwd: string;
   readonly relativePath: string;
-  /** Which version the left side shows, for its model's identity. */
-  readonly originalRevision: "HEAD" | "index";
+  /** Which version the left side shows ("HEAD", "index", "turn-3"), for its model's identity. */
+  readonly originalRevision: string;
   readonly originalContents: string;
   readonly modifiedContents: string;
   /** The working-tree file as last read from disk, when the right side is editable. */

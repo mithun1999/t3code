@@ -3,12 +3,16 @@ import * as NodeChildProcess from "node:child_process";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, describe, expect } from "@effect/vitest";
-import { ScmError } from "@t3tools/contracts";
+import { ScmError, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
+import {
+  checkpointRefForThreadTurn,
+  checkpointStartRefForThreadTurn,
+} from "../checkpointing/Utils.ts";
 import * as WorkspaceScm from "./WorkspaceScm.ts";
 
 const TestLayer = WorkspaceScm.layer.pipe(Layer.provideMerge(NodeServices.layer));
@@ -411,6 +415,35 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceScm", (it) => {
           binary: false,
           truncated: false,
         });
+      }),
+    );
+
+    it.effect("reads a file as a turn found it and left it, from its checkpoints", () =>
+      Effect.gen(function* () {
+        const scm = yield* WorkspaceScm.WorkspaceScm;
+        const cwd = yield* makeRepo({ commit: true });
+        const threadId = ThreadId.make("thread-turns");
+        const commitAs = function* (contents: string) {
+          yield* writeTextFile(cwd, "README.md", contents);
+          yield* git(cwd, "commit", "-qam", contents.trim());
+          return (yield* git(cwd, "rev-parse", "HEAD")).trim();
+        };
+        const turnZero = yield* commitAs("# Turn 0\n");
+        const betweenTurns = yield* commitAs("# Edited between turns\n");
+        const turnOne = yield* commitAs("# Turn 1\n");
+        yield* git(cwd, "update-ref", checkpointRefForThreadTurn(threadId, 0), turnZero);
+        yield* git(cwd, "update-ref", checkpointRefForThreadTurn(threadId, 1), turnOne);
+        const read = (revision: "turn-before" | "turn-after") =>
+          scm
+            .readFile({ cwd, relativePath: "README.md", revision, threadId, turnCount: 1 })
+            .pipe(Effect.map((result) => result.contents));
+
+        expect(yield* read("turn-after")).toBe("# Turn 1\n");
+        // Without a start checkpoint, "before" is the previous turn's end.
+        expect(yield* read("turn-before")).toBe("# Turn 0\n");
+        // With one, edits made between the turns stay out of the turn's diff.
+        yield* git(cwd, "update-ref", checkpointStartRefForThreadTurn(threadId, 1), betweenTurns);
+        expect(yield* read("turn-before")).toBe("# Edited between turns\n");
       }),
     );
 

@@ -7,7 +7,7 @@
  */
 import * as Schema from "effect/Schema";
 
-import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ProjectEntryKind } from "./project.ts";
 
 const WORKSPACE_PATH_MAX_LENGTH = 1024;
@@ -187,7 +187,12 @@ export const ScmCommitResult = Schema.Struct({
 });
 export type ScmCommitResult = typeof ScmCommitResult.Type;
 
-export const ScmRevision = Schema.Literals(["HEAD", "index"]);
+/**
+ * Which version of a file to read: HEAD, the index, or the file as a thread's
+ * turn found it ("turn-before") and left it ("turn-after"), from the turn's
+ * checkpoint refs.
+ */
+export const ScmRevision = Schema.Literals(["HEAD", "index", "turn-before", "turn-after"]);
 export type ScmRevision = typeof ScmRevision.Type;
 
 export const ScmReadFileInput = Schema.Struct({
@@ -195,6 +200,9 @@ export const ScmReadFileInput = Schema.Struct({
   /** Repository-relative path. */
   relativePath: WorkspaceRelativePath,
   revision: ScmRevision,
+  /** The thread and turn, for the turn revisions. */
+  threadId: Schema.optional(ThreadId),
+  turnCount: Schema.optional(NonNegativeInt),
 });
 export type ScmReadFileInput = typeof ScmReadFileInput.Type;
 

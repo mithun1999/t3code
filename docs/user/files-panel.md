@@ -1,8 +1,9 @@
 # Files panel
 
-The Files panel works like VS Code's window: an activity bar on the left picks
-the side bar view, and the file or diff you open fills the rest. Choose the
-active view's icon again to hide the side bar.
+The Files panel works like VS Code's window with its side bar on the right: an
+activity bar at the panel's right edge picks the side bar view, and the file or
+diff you open fills the rest. Choose the active view's icon again to hide the
+side bar.
 
 While the panel has the keyboard, VS Code's view keys work: ⌘B hides or shows
 the side bar, ⇧⌘E shows the Explorer and ⌃⇧G shows Source Control. Elsewhere
@@ -54,9 +55,13 @@ The Source Control view lists each repository's changes in VS Code's groups:
 - Discarding a new file moves it to the Trash. Discarding edits to a tracked
   file can't be undone.
 
-"Open diff" in the chat, for the latest turn, opens here when those changes
-are still uncommitted, so you can review, stage and commit them in one place.
-Earlier turns open the turn diff, which shows exactly what that turn changed.
+Source Control replaces the old Diff panel: **Source Control** in the panel's
+menu and ⌘D open it, and it opens by itself after a turn that changed files.
+"Open diff" in the chat opens here too. For the latest turn, changes that are
+still uncommitted open in Source Control, so you can review, stage and commit
+them in one place. Earlier turns, and changes already committed, open that
+turn's own changes (the tab says "Turn 3"): the file as the turn found it
+against how it left it.
 
 ### The diff editor
 

@@ -136,8 +136,9 @@ describe("rightPanelStore", () => {
         selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA),
       ).toEqual(surface);
 
+      // "Diff" is Source Control in the Files panel now.
       store.open(refA, "diff");
-      expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBe("diff");
+      expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBe("files");
     },
   );
 
@@ -197,7 +198,8 @@ describe("rightPanelStore", () => {
 
     const nextTurnRevision = store.getUserActionRevision(refA);
     expect(store.openProactive(refA, completedDiff, nextTurnRevision)).toBe(true);
-    expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBe("diff");
+    // Source Control opens in the Files panel tab that is already there.
+    expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBe("file");
   });
 
   it("keeps manual choices scoped to their thread and environment", () => {
@@ -222,7 +224,7 @@ describe("rightPanelStore", () => {
     store.reconcileFileSurfaces(refA, false);
 
     expect(store.openProactive(refA, completedDiff, revision)).toBe(true);
-    expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBe("diff");
+    expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBe("files");
   });
 
   it("drops the legacy singleton terminal surface during migration", () => {
@@ -407,10 +409,11 @@ describe("rightPanelStore", () => {
           activeSurfaceId: null,
           surfaces: [],
         },
+        // The diff surface is gone too (v14): Source Control replaced it.
         "env-1:thread-B": {
-          isOpen: true,
-          activeSurfaceId: "diff",
-          surfaces: [{ id: "diff", kind: "diff" }],
+          isOpen: false,
+          activeSurfaceId: null,
+          surfaces: [],
         },
       },
     });
@@ -432,18 +435,29 @@ describe("rightPanelStore", () => {
   });
 
   it("reopening an inactive singleton activates its existing surface", () => {
-    useRightPanelStore.getState().open(refA, "diff");
+    useRightPanelStore.getState().open(refA, "files");
     useRightPanelStore.getState().open(refA, "agents");
-    useRightPanelStore.getState().open(refA, "diff");
+    useRightPanelStore.getState().open(refA, "files");
 
     expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
       isOpen: true,
-      activeSurfaceId: "diff",
+      activeSurfaceId: "files",
       surfaces: [
-        { id: "diff", kind: "diff" },
+        { id: "files", kind: "files" },
         { id: "agents", kind: "agents" },
       ],
     });
+  });
+
+  it("opens Source Control in the Files panel instead of a diff tab", () => {
+    const store = useRightPanelStore.getState();
+    store.openFile(refA, "src/app.ts", undefined, undefined, PINNED);
+    store.open(refA, "agents");
+    store.open(refA, "diff");
+
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.activeSurfaceId).toBe("file:src/app.ts");
+    expect(state.surfaces.some((surface) => surface.kind === "diff")).toBe(false);
   });
 
   it("keeps files as a singleton surface", () => {
@@ -741,14 +755,25 @@ describe("rightPanelStore", () => {
   });
 
   it("toggle hides the panel without discarding the active surface", () => {
-    useRightPanelStore.getState().toggle(refA, "diff");
-    expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBe("diff");
-    useRightPanelStore.getState().toggle(refA, "diff");
+    useRightPanelStore.getState().toggle(refA, "agents");
+    expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBe("agents");
+    useRightPanelStore.getState().toggle(refA, "agents");
     expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBeNull();
     expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
       isOpen: false,
-      activeSurfaceId: "diff",
-      surfaces: [{ id: "diff", kind: "diff" }],
+      activeSurfaceId: "agents",
+      surfaces: [{ id: "agents", kind: "agents" }],
+    });
+  });
+
+  it("toggles Source Control for the diff key: shows it, then hides the panel", () => {
+    useRightPanelStore.getState().toggle(refA, "diff");
+    expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBe("files");
+    useRightPanelStore.getState().toggle(refA, "diff");
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: false,
+      activeSurfaceId: "files",
+      surfaces: [{ id: "files", kind: "files" }],
     });
   });
 

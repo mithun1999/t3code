@@ -1,15 +1,11 @@
-import * as Schema from "effect/Schema";
 import { FilesIcon, GitBranchIcon } from "lucide-react";
 import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
-import { writeLocalStorageValue } from "~/hooks/useLocalStorage";
 import { cn } from "~/lib/utils";
+import type { WorkbenchSideBarView } from "~/workbenchView";
 
-export type WorkbenchSideBarView = "explorer" | "scm";
-
-export const SIDE_BAR_VIEW_STORAGE_KEY = "t3code.workbenchSideBarView";
-export const SideBarViewSchema = Schema.Literals(["explorer", "scm"]);
+export type { WorkbenchSideBarView } from "~/workbenchView";
 
 export const SIDE_BAR_MIN_WIDTH = 180;
 export const SIDE_BAR_DEFAULT_WIDTH = 240;
@@ -34,7 +30,7 @@ function ActivityBarButton(props: {
             className={cn(
               "relative flex size-9 items-center justify-center text-muted-foreground transition-colors hover:text-foreground",
               props.active &&
-                "text-foreground before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-primary",
+                "text-foreground before:absolute before:inset-y-1.5 before:right-0 before:w-0.5 before:rounded-full before:bg-primary",
             )}
             onClick={props.onPress}
           />
@@ -47,7 +43,7 @@ function ActivityBarButton(props: {
           </span>
         ) : null}
       </TooltipTrigger>
-      <TooltipPopup side="right">
+      <TooltipPopup side="left">
         <div>{props.tooltip ?? props.label}</div>
         {props.hint ? <div className="text-muted-foreground">{props.hint}</div> : null}
       </TooltipPopup>
@@ -73,7 +69,7 @@ export function WorkbenchActivityBar(props: {
   return (
     <nav
       aria-label="Views"
-      className="flex w-9 shrink-0 flex-col items-center border-r border-border/60 bg-background py-0.5"
+      className="flex w-9 shrink-0 flex-col items-center border-l border-border/60 bg-background py-0.5"
       data-workbench-activity-bar
     >
       <ActivityBarButton
@@ -99,7 +95,7 @@ export function WorkbenchActivityBar(props: {
   );
 }
 
-/** Drag handle on the side bar's edge. */
+/** Drag handle on the side bar's inner (left) edge. */
 export function SideBarResizeHandle(props: { width: number; onResize: (width: number) => void }) {
   const startResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
@@ -113,7 +109,8 @@ export function SideBarResizeHandle(props: { width: number; onResize: (width: nu
     const maxWidth = container.getBoundingClientRect().width * 0.4;
     handle.setPointerCapture(event.pointerId);
     const move = (moveEvent: PointerEvent) => {
-      const next = Math.round(startWidth + moveEvent.clientX - startX);
+      // The side bar is on the right: dragging left widens it.
+      const next = Math.round(startWidth - (moveEvent.clientX - startX));
       props.onResize(Math.max(SIDE_BAR_MIN_WIDTH, Math.min(maxWidth, next)));
     };
     const stop = () => {
@@ -131,18 +128,9 @@ export function SideBarResizeHandle(props: { width: number; onResize: (width: nu
       aria-orientation="vertical"
       aria-label="Resize side bar"
       aria-valuenow={props.width}
-      className="absolute inset-y-0 -right-1 z-10 w-2 cursor-col-resize touch-none after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:bg-primary after:opacity-0 after:transition-opacity hover:after:opacity-100"
+      className="absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize touch-none after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:bg-primary after:opacity-0 after:transition-opacity hover:after:opacity-100"
       onPointerDown={startResize}
       onDoubleClick={() => props.onResize(SIDE_BAR_DEFAULT_WIDTH)}
     />
   );
-}
-
-/** Switches the Files panel's side bar to Source Control, mounted or not. */
-export function revealSourceControlView(): void {
-  try {
-    writeLocalStorageValue(SIDE_BAR_VIEW_STORAGE_KEY, "scm", SideBarViewSchema);
-  } catch (error) {
-    console.error(error);
-  }
 }

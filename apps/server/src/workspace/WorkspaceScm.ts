@@ -31,6 +31,10 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
+import {
+  checkpointRefForThreadTurn,
+  checkpointStartRefForThreadTurn,
+} from "../checkpointing/Utils.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 
 const SCM_GROUP_MAX_CHANGES = 5000;
@@ -224,6 +228,19 @@ export function parseScmStatus(
   }
 
   return { branch, hasCommits, upstream, ahead, behind, merge, staged, changes, truncated };
+}
+
+function revisionLabel(revision: ScmReadFileInput["revision"]): string {
+  switch (revision) {
+    case "HEAD":
+      return "HEAD";
+    case "index":
+      return "the index";
+    case "turn-before":
+      return "before the turn";
+    case "turn-after":
+      return "after the turn";
+  }
 }
 
 /**
@@ -576,12 +593,45 @@ export const make = Effect.gen(function* () {
     },
   );
 
+  /**
+   * The ref a read targets. A turn's "before" is the checkpoint taken when the
+   * turn started (so edits made between turns stay out), or the previous
+   * turn's checkpoint for threads from before those existed.
+   */
+  const resolveRevision = Effect.fn("WorkspaceScm.resolveRevision")(function* (
+    input: ScmReadFileInput,
+  ) {
+    if (input.revision === "HEAD" || input.revision === "index") return input.revision;
+    if (input.threadId === undefined || input.turnCount === undefined) {
+      return yield* new ScmError({
+        cwd: input.cwd,
+        operation: "readFile",
+        message: "Reading a turn's version of a file needs the thread and turn.",
+      });
+    }
+    if (input.revision === "turn-after") {
+      return checkpointRefForThreadTurn(input.threadId, input.turnCount);
+    }
+    const startRef = checkpointStartRefForThreadTurn(input.threadId, input.turnCount);
+    const start = yield* runGit(
+      "readFile",
+      input.cwd,
+      ["rev-parse", "--verify", "--quiet", `${startRef}^{commit}`],
+      { env: STABLE_LOCALE_ENV },
+    );
+    return start.exitCode === 0
+      ? startRef
+      : checkpointRefForThreadTurn(input.threadId, Math.max(0, input.turnCount - 1));
+  });
+
   const readFile: WorkspaceScm["Service"]["readFile"] = Effect.fn("WorkspaceScm.readFile")(
     function* (input) {
       const relativePath = input.relativePath.replace(/^(?:\.\/)+/, "");
+      const revisionName = yield* resolveRevision(input);
       // `:0:` names the index entry explicitly; a bare `:` would read `1:x`
       // as merge stage 1 of `x`.
-      const objectName = input.revision === "HEAD" ? `HEAD:${relativePath}` : `:0:${relativePath}`;
+      const objectName =
+        revisionName === "index" ? `:0:${relativePath}` : `${revisionName}:${relativePath}`;
       const missing: ScmReadFileResult = {
         exists: false,
         contents: "",
@@ -612,7 +662,7 @@ export const make = Effect.gen(function* () {
         "readFile",
         input.cwd,
         ["show", objectName],
-        `Couldn't read '${relativePath}' from ${input.revision === "HEAD" ? "HEAD" : "the index"}.`,
+        `Couldn't read '${relativePath}' from ${revisionLabel(input.revision)}.`,
         { maxOutputBytes: SCM_READ_FILE_MAX_BYTES },
       );
       if (output.stdout.includes("\0")) {
