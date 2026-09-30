@@ -188,6 +188,7 @@ import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import {
   pullRequestSurface,
   fileSurfaceId,
+  type FileSurfaceCompare,
   selectActiveRightPanel,
   selectActiveRightPanelSurface,
   selectThreadRightPanelState,
@@ -4802,6 +4803,20 @@ export default function ChatView(props: ChatViewProps) {
       useRightPanelStore.getState().openFile(activeThreadRef, relativePath, undefined, root);
     },
     [activeProject, activeThreadRef],
+  );
+  const openFileDiffSurface = useCallback(
+    (relativePath: string, compare: FileSurfaceCompare, root?: string) => {
+      if (!activeThreadRef || !activeProject) return;
+      useRightPanelStore.getState().openFileDiff(activeThreadRef, relativePath, compare, root);
+    },
+    [activeProject, activeThreadRef],
+  );
+  const retargetFileSurfaces = useCallback(
+    (move: { readonly root?: string; readonly fromPath: string; readonly toPath: string }) => {
+      if (!activeThreadRef) return;
+      useRightPanelStore.getState().retargetFileSurfaces(activeThreadRef, move);
+    },
+    [activeThreadRef],
   );
   // The shell carries server PR updates even while thread detail is still loading.
   const activeThreadMetadata = activeThreadShell ?? activeThread;
@@ -9945,6 +9960,13 @@ export default function ChatView(props: ChatViewProps) {
               : null
           }
           onOpenFile={openFileSurface}
+          onOpenFileDiff={openFileDiffSurface}
+          onEntryMoved={retargetFileSurfaces}
+          compare={
+            renderedRightPanelSurface.kind === "file"
+              ? (renderedRightPanelSurface.compare ?? null)
+              : null
+          }
           onPendingChange={handleFilePendingChange}
           selectedFilePending={
             renderedRightPanelSurface.kind === "file" &&

@@ -5,6 +5,8 @@ import * as Path from "effect/Path";
 export const writeFileStringAtomically = (input: {
   readonly filePath: string;
   readonly contents: string;
+  /** Permission bits for the written file, such as the mode of the file it replaces. */
+  readonly mode?: number;
 }) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -20,6 +22,9 @@ export const writeFileStringAtomically = (input: {
       const tempPath = path.join(tempDirectory, "contents.tmp");
 
       yield* fs.writeFileString(tempPath, input.contents);
+      if (input.mode !== undefined) {
+        yield* fs.chmod(tempPath, input.mode);
+      }
       yield* fs.rename(tempPath, input.filePath);
     }),
   );

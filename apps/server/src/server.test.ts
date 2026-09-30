@@ -164,8 +164,11 @@ import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
+import * as WorkspaceEntryOperations from "./workspace/WorkspaceEntryOperations.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
+import * as WorkspaceScm from "./workspace/WorkspaceScm.ts";
+import * as WorkspaceWatcher from "./workspace/WorkspaceWatcher.ts";
 import { WorkspaceGitScanLive } from "./workspace/WorkspaceGitScan.ts";
 import { WorkspaceFileLive } from "./workspace/WorkspaceFile.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
@@ -727,6 +730,12 @@ const buildAppUnderTest = (options?: {
         Layer.provide(WorkspacePaths.layer),
         Layer.provide(workspaceEntriesLayer),
       ),
+      WorkspaceEntryOperations.layer.pipe(
+        Layer.provide(WorkspacePaths.layer),
+        Layer.provide(workspaceEntriesLayer),
+      ),
+      WorkspaceWatcher.layer,
+      WorkspaceScm.layer,
       WorkspaceGitScanLive,
       WorkspaceFileLive,
       ProjectFaviconResolver.layer.pipe(
@@ -7508,6 +7517,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         contents: "export const answer = 42;\n",
         byteLength: 26,
         truncated: false,
+        revision: WorkspaceFileSystem.fileRevision(
+          new TextEncoder().encode("export const answer = 42;\n"),
+        ),
       });
     }).pipe(Effect.provide(NodeHttpServer.layerTest), TestClock.withLive),
   );
@@ -8128,6 +8140,70 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.isDefined(writeError.cause);
       assert.notProperty(writeError, "contents");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "routes websocket rpc explorer operations, scm.status and conflict-checked writes",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const workspaceDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-ws-workspace-ide-" });
+
+        yield* buildAppUnderTest();
+
+        const wsUrl = yield* getWsServerUrl("/ws");
+        const response = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            Effect.gen(function* () {
+              const created = yield* client[WS_METHODS.workspaceCreateEntry]({
+                cwd: workspaceDir,
+                relativePath: "src/new.ts",
+                kind: "file",
+              });
+              const duplicate = yield* client[WS_METHODS.workspaceCreateEntry]({
+                cwd: workspaceDir,
+                relativePath: "src/new.ts",
+                kind: "file",
+              }).pipe(Effect.result);
+              const scmStatus = yield* client[WS_METHODS.scmStatus]({ cwd: workspaceDir });
+              const read = yield* client[WS_METHODS.projectsReadFile]({
+                cwd: workspaceDir,
+                relativePath: "src/new.ts",
+              });
+              yield* fs.writeFileString(path.join(workspaceDir, "src", "new.ts"), "elsewhere\n");
+              const conflict = yield* client[WS_METHODS.projectsWriteFile]({
+                cwd: workspaceDir,
+                relativePath: "src/new.ts",
+                contents: "mine\n",
+                expectedRevision: read.revision ?? "",
+              }).pipe(Effect.result);
+              return { created, duplicate, scmStatus, conflict };
+            }),
+          ),
+        );
+
+        assert.deepEqual(response.created, { relativePath: "src/new.ts" });
+        if (
+          response.duplicate._tag !== "Failure" ||
+          response.duplicate.failure._tag !== "WorkspaceEntryOperationError"
+        ) {
+          assert.fail("Expected a WorkspaceEntryOperationError");
+        }
+        assert.equal(response.duplicate.failure.failure, "already_exists");
+        assert.equal(response.scmStatus.isRepo, false);
+        if (
+          response.conflict._tag !== "Failure" ||
+          response.conflict.failure._tag !== "ProjectWriteFileError"
+        ) {
+          assert.fail("Expected a ProjectWriteFileError");
+        }
+        assert.equal(response.conflict.failure.failure, "revision_conflict");
+        assert.equal(
+          yield* fs.readFileString(path.join(workspaceDir, "src", "new.ts")),
+          "elsewhere\n",
+        );
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("routes websocket rpc shell.openInEditor", () =>

@@ -657,10 +657,15 @@ function surfaceTitle(
       return "Diff";
     case "files":
       return "Files";
-    case "file":
-      return surface.relativePath.slice(
+    case "file": {
+      const name = surface.relativePath.slice(
         Math.max(surface.relativePath.lastIndexOf("/"), surface.relativePath.lastIndexOf("\\")) + 1,
       );
+      // VS Code's titles for a file's unstaged and staged changes.
+      if (surface.compare === "working-tree") return `${name} (Working Tree)`;
+      if (surface.compare === "staged") return `${name} (Index)`;
+      return name;
+    }
     case "terminal":
       return (
         terminalLabelsById.get(surface.activeTerminalId) ??

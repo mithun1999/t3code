@@ -136,7 +136,10 @@ import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
+import * as WorkspaceEntryOperations from "./workspace/WorkspaceEntryOperations.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
+import * as WorkspaceScm from "./workspace/WorkspaceScm.ts";
+import * as WorkspaceWatcher from "./workspace/WorkspaceWatcher.ts";
 import { readWorkflowScript } from "./orchestration/workflowScriptQuery.ts";
 import * as WorkspaceFile from "./workspace/WorkspaceFile.ts";
 import * as WorkspaceGitScan from "./workspace/WorkspaceGitScan.ts";
@@ -334,6 +337,8 @@ function projectFileFailureContext(
       return { failure: "path_not_file", resolvedPath: error.resolvedPath };
     case "WorkspaceBinaryFileError":
       return { failure: "binary_file", resolvedPath: error.resolvedPath };
+    case "WorkspaceFileRevisionConflictError":
+      return { failure: "revision_conflict", resolvedPath: error.resolvedPath };
     default:
       return unexpectedCompatibilityError(error);
   }
@@ -590,6 +595,9 @@ const makeWsRpcLayer = (
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+      const workspaceEntryOperations = yield* WorkspaceEntryOperations.WorkspaceEntryOperations;
+      const workspaceWatcher = yield* WorkspaceWatcher.WorkspaceWatcher;
+      const workspaceScm = yield* WorkspaceScm.WorkspaceScm;
       const canReplayPersistedRange = Effect.fnUntraced(function* (
         afterSequence: number,
         headSequence: number,
@@ -3417,6 +3425,78 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "workspace" },
           ),
+        // Explorer operations and git changes also refresh the shared git
+        // status (badge, commit dialog), whether or not they fully succeeded.
+        [WS_METHODS.workspaceCreateEntry]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceCreateEntry,
+            workspaceEntryOperations
+              .createEntry(input)
+              .pipe(Effect.ensuring(refreshGitStatus(input.cwd))),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.workspaceMoveEntry]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceMoveEntry,
+            workspaceEntryOperations
+              .moveEntry(input)
+              .pipe(Effect.ensuring(refreshGitStatus(input.cwd))),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.workspaceCopyEntry]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceCopyEntry,
+            workspaceEntryOperations
+              .copyEntry(input)
+              .pipe(Effect.ensuring(refreshGitStatus(input.cwd))),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.workspaceDeleteEntries]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceDeleteEntries,
+            workspaceEntryOperations
+              .deleteEntries(input)
+              .pipe(Effect.ensuring(refreshGitStatus(input.cwd))),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.subscribeWorkspaceChanges]: (input) =>
+          observeRpcStream(
+            WS_METHODS.subscribeWorkspaceChanges,
+            workspaceWatcher.watch(input.cwd),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.scmStatus]: (input) =>
+          observeRpcEffect(WS_METHODS.scmStatus, workspaceScm.status(input), {
+            "rpc.aggregate": "workspace",
+          }),
+        [WS_METHODS.scmStage]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.scmStage,
+            workspaceScm.stage(input).pipe(Effect.ensuring(refreshGitStatus(input.cwd))),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.scmUnstage]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.scmUnstage,
+            workspaceScm.unstage(input).pipe(Effect.ensuring(refreshGitStatus(input.cwd))),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.scmDiscard]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.scmDiscard,
+            workspaceScm.discard(input).pipe(Effect.ensuring(refreshGitStatus(input.cwd))),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.scmCommit]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.scmCommit,
+            workspaceScm.commit(input).pipe(Effect.ensuring(refreshGitStatus(input.cwd))),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.scmReadFile]: (input) =>
+          observeRpcEffect(WS_METHODS.scmReadFile, workspaceScm.readFile(input), {
+            "rpc.aggregate": "workspace",
+          }),
         [WS_METHODS.shellOpenInEditor]: (input) =>
           observeRpcEffect(WS_METHODS.shellOpenInEditor, externalLauncher.launchEditor(input), {
             "rpc.aggregate": "workspace",

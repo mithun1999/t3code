@@ -220,6 +220,8 @@ export const ProjectReadFileResult = Schema.Struct({
   contents: Schema.String,
   byteLength: NonNegativeInt,
   truncated: Schema.Boolean,
+  /** Hash of the whole file, for conflict-checked writes. Absent when truncated. */
+  revision: Schema.optional(Schema.String),
 });
 export type ProjectReadFileResult = typeof ProjectReadFileResult.Type;
 
@@ -228,6 +230,7 @@ export const ProjectFileFailure = Schema.Literals([
   "resolved_path_outside_root",
   "path_not_file",
   "binary_file",
+  "revision_conflict",
   "operation_failed",
 ]);
 export type ProjectFileFailure = typeof ProjectFileFailure.Type;
@@ -284,11 +287,18 @@ export const ProjectWriteFileInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_WRITE_FILE_PATH_MAX_LENGTH)),
   contents: Schema.String,
+  /**
+   * The revision the caller last read or wrote. When the file on disk has
+   * moved on since, the write fails with `revision_conflict` instead of
+   * overwriting someone else's change.
+   */
+  expectedRevision: Schema.optional(Schema.String),
 });
 export type ProjectWriteFileInput = typeof ProjectWriteFileInput.Type;
 
 export const ProjectWriteFileResult = Schema.Struct({
   relativePath: TrimmedNonEmptyString,
+  revision: Schema.optional(Schema.String),
 });
 export type ProjectWriteFileResult = typeof ProjectWriteFileResult.Type;
 

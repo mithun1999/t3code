@@ -102,8 +102,11 @@ import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
+import * as WorkspaceEntryOperations from "./workspace/WorkspaceEntryOperations.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
+import * as WorkspaceScm from "./workspace/WorkspaceScm.ts";
+import * as WorkspaceWatcher from "./workspace/WorkspaceWatcher.ts";
 import { WorkspaceGitScanLive } from "./workspace/WorkspaceGitScan.ts";
 import { WorkspaceFileLive } from "./workspace/WorkspaceFile.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
@@ -440,10 +443,18 @@ const WorkspaceFileSystemLayerLive = WorkspaceFileSystem.layer.pipe(
   Layer.provide(WorkspaceEntriesLayerLive),
 );
 
+const WorkspaceEntryOperationsLayerLive = WorkspaceEntryOperations.layer.pipe(
+  Layer.provide(WorkspacePaths.layer),
+  Layer.provide(WorkspaceEntriesLayerLive),
+);
+
 const WorkspaceLayerLive = Layer.mergeAll(
   WorkspacePaths.layer,
   WorkspaceEntriesLayerLive,
   WorkspaceFileSystemLayerLive,
+  WorkspaceEntryOperationsLayerLive,
+  WorkspaceWatcher.layer,
+  WorkspaceScm.layer,
   WorkspaceGitScanLive,
   WorkspaceFileLive,
 );
