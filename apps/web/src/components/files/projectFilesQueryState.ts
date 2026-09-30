@@ -185,7 +185,7 @@ export function useProjectFilePickerQuery(
   cwd: string,
   query: string,
   limit: number,
-  options?: { readonly imageOnly?: boolean },
+  options?: { readonly imageOnly?: boolean; readonly ranking?: "vscode" },
 ) {
   const search = useProjectPathSearch(
     {
@@ -194,6 +194,7 @@ export function useProjectFilePickerQuery(
       query,
       kind: "file",
       ...(options?.imageOnly ? { imageOnly: true } : {}),
+      ...(options?.ranking ? { ranking: options.ranking } : {}),
     },
     limit,
     { allowEmptyQuery: true },

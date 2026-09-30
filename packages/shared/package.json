@@ -175,6 +175,10 @@
       "types": "./src/searchRanking.ts",
       "import": "./src/searchRanking.ts"
     },
+    "./fuzzyScorer": {
+      "types": "./src/fuzzyScorer.ts",
+      "import": "./src/fuzzyScorer.ts"
+    },
     "./qrCode": {
       "types": "./src/qrCode.ts",
       "import": "./src/qrCode.ts"

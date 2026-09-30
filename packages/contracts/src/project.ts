@@ -25,6 +25,9 @@ export const ProjectSearchEntriesInput = Schema.Struct({
   limit: PositiveInt.check(Schema.isLessThanOrEqualTo(PROJECT_SEARCH_ENTRIES_MAX_LIMIT)),
   kind: Schema.optional(ProjectEntryKind),
   imageOnly: Schema.optional(Schema.Boolean),
+  // "vscode" ranks files with VS Code's quick-open scorer over every indexed
+  // file (file searches with a query only). Omitted keeps the index's ranking.
+  ranking: Schema.optional(Schema.Literals(["vscode"])),
 });
 export type ProjectSearchEntriesInput = typeof ProjectSearchEntriesInput.Type;
 

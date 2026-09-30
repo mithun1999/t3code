@@ -209,6 +209,8 @@ type ProjectPathSearchTarget = ComposerPathSearchTarget & {
   readonly imageOnly?: boolean | undefined;
   // Multi-repo workspaces (#923): search the union of these roots; entries come back tagged.
   readonly roots?: readonly string[] | undefined;
+  /** Rank file matches with VS Code's quick-open scorer. */
+  readonly ranking?: "vscode" | undefined;
 };
 
 export function areProjectPathSearchTargetsEqual(
@@ -221,6 +223,7 @@ export function areProjectPathSearchTargetsEqual(
     left.query === right.query &&
     left.kind === right.kind &&
     left.imageOnly === right.imageOnly &&
+    left.ranking === right.ranking &&
     (left.roots ?? []).join("\0") === (right.roots ?? []).join("\0")
   );
 }
@@ -239,8 +242,17 @@ export function useProjectPathSearch(
       kind: target.kind,
       imageOnly: target.imageOnly,
       roots: target.roots,
+      ranking: target.ranking,
     }),
-    [target.cwd, target.environmentId, target.imageOnly, target.kind, target.query, target.roots],
+    [
+      target.cwd,
+      target.environmentId,
+      target.imageOnly,
+      target.kind,
+      target.query,
+      target.ranking,
+      target.roots,
+    ],
   );
   const debouncedTarget = useDebouncedValue(normalizedTarget, PROJECT_PATH_SEARCH_DEBOUNCE_MS);
   const result = useEnvironmentQuery(
@@ -256,6 +268,7 @@ export function useProjectPathSearch(
             limit,
             ...(debouncedTarget.kind ? { kind: debouncedTarget.kind } : {}),
             ...(debouncedTarget.imageOnly ? { imageOnly: true } : {}),
+            ...(debouncedTarget.ranking ? { ranking: debouncedTarget.ranking } : {}),
             ...(debouncedTarget.roots && debouncedTarget.roots.length > 0
               ? { roots: debouncedTarget.roots }
               : {}),

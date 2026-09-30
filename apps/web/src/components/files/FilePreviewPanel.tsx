@@ -89,6 +89,7 @@ import {
 } from "./filePreviewMode";
 import { useFileSaveCoordinator } from "./useFileSaveCoordinator";
 import { buildRootLabels } from "./filePath";
+import { recordRecentFile } from "./recentFiles";
 import { ScmDiffView } from "./workbench/ScmDiffView";
 import { scmChangeCount } from "./workbench/scmPresentation";
 import { type ScmCompare, SourceControlPanel } from "./workbench/SourceControlPanel";
@@ -1168,6 +1169,20 @@ export default function FilePreviewPanel({
     setSideBarView(view);
     if (!explorerOpen) setSideBarOpen(true);
   };
+
+  // Opened files feed ⌘P's "Recently opened" list, keyed by path within `cwd`.
+  useEffect(() => {
+    if (!workbenchAvailable || previewPath === null || compare) return;
+    const root = fileCwd.replace(/\/+$/, "");
+    const base = cwd.replace(/\/+$/, "");
+    const pathInWorkspace =
+      root === base
+        ? previewPath
+        : root.startsWith(`${base}/`)
+          ? `${root.slice(base.length + 1)}/${previewPath}`
+          : null;
+    if (pathInWorkspace) recordRecentFile(environmentId, cwd, pathInWorkspace);
+  }, [compare, cwd, environmentId, fileCwd, previewPath, workbenchAvailable]);
 
   // VS Code's view keys while the panel has focus: ⌘B hides or shows the side
   // bar, ⇧⌘E and ⌃⇧G bring up the Explorer and Source Control.
