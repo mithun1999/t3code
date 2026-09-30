@@ -225,6 +225,7 @@ function retainThreadMessagesAfterRevert(
   messages: ReadonlyArray<OrchestrationMessage>,
   retainedTurnIds: ReadonlySet<string>,
   turnCount: number,
+  retainedUserMessageIds: ReadonlySet<string> = new Set(),
 ): ReadonlyArray<OrchestrationMessage> {
   const retainedMessageIds = new Set<string>();
   for (const message of messages) {
@@ -232,7 +233,10 @@ function retainThreadMessagesAfterRevert(
       retainedMessageIds.add(message.id);
       continue;
     }
-    if (message.turnId !== null && retainedTurnIds.has(message.turnId)) {
+    if (
+      (message.turnId !== null && retainedTurnIds.has(message.turnId)) ||
+      (message.role === "user" && retainedUserMessageIds.has(message.id))
+    ) {
       retainedMessageIds.add(message.id);
     }
   }
@@ -960,6 +964,8 @@ export function projectEvent(
           return nextBase;
         }
 
+        const existing = thread.checkpoints.find((entry) => entry.turnId === payload.turnId);
+        const userMessageId = payload.userMessageId ?? existing?.userMessageId;
         const checkpoint = yield* decodeForEvent(
           OrchestrationCheckpointSummary,
           {
@@ -969,6 +975,7 @@ export function projectEvent(
             status: payload.status,
             files: payload.files,
             assistantMessageId: payload.assistantMessageId,
+            ...(userMessageId !== undefined ? { userMessageId } : {}),
             completedAt: payload.completedAt,
           },
           event.type,
@@ -980,7 +987,6 @@ export function projectEvent(
         // ProviderRuntimeIngestion may fire multiple turn.diff.updated events
         // per turn; without this guard later placeholders would clobber the
         // real capture dispatched by CheckpointReactor.
-        const existing = thread.checkpoints.find((entry) => entry.turnId === checkpoint.turnId);
         if (existing && existing.status !== "missing" && checkpoint.status === "missing") {
           return nextBase;
         }
@@ -1043,6 +1049,7 @@ export function projectEvent(
             thread.messages,
             retainedTurnIds,
             payload.turnCount,
+            new Set(checkpoints.flatMap((checkpoint) => checkpoint.userMessageId ?? [])),
           ).slice(-MAX_THREAD_MESSAGES);
           const proposedPlans = retainThreadProposedPlansAfterRevert(
             thread.proposedPlans,

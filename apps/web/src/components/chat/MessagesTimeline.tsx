@@ -286,7 +286,7 @@ interface TimelineRowSharedState {
   onFileOpen: (attachment: ChatFileAttachment) => void;
   onFileDownload: (attachment: ChatFileAttachment) => void;
   openPullRequest: (event: MouseEvent<HTMLElement>, url: string) => void;
-  onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  onOpenTurnDiff: (turnId: TurnId, filePath?: string, repoRoot?: string) => void;
   onToggleTurnFold: (turnId: TurnId) => void;
   onToggleWorkGroup: (groupId: string, anchorKey: string) => void;
   onToggleWorkEntry: (anchorKey: string, collapsed: boolean) => void;
@@ -426,7 +426,7 @@ interface MessagesTimelineProps {
    * projection and list extraData — do not remount on this value.
    */
   displayThreadKey?: string;
-  onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  onOpenTurnDiff: (turnId: TurnId, filePath?: string, repoRoot?: string) => void;
   supportsConversationRollback: boolean;
   onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
   onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
@@ -2310,7 +2310,8 @@ function RevertUserMessageButton({
             type="button"
             size="xs"
             variant="ghost"
-            disabled={activity.isRevertingCheckpoint || activity.isWorking}
+            // A running turn is stopped first, so only another rewind blocks this.
+            disabled={activity.isRevertingCheckpoint}
             onClick={() => ctx.onRevertToTurnCount(turnCount, messageId)}
             aria-label="Edit from here"
           />
@@ -3390,7 +3391,7 @@ const AssistantChangedFilesSection = memo(function AssistantChangedFilesSection(
   turnSummary: TurnDiffSummary | undefined;
   routeThreadKey: string;
   resolvedTheme: "light" | "dark";
-  onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  onOpenTurnDiff: (turnId: TurnId, filePath?: string, repoRoot?: string) => void;
 }) {
   if (!turnSummary) return null;
   const checkpointFiles = turnSummary.files;
@@ -3420,7 +3421,7 @@ function AssistantChangedFilesSectionInner({
   checkpointFiles: TurnDiffSummary["files"];
   routeThreadKey: string;
   resolvedTheme: "light" | "dark";
-  onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  onOpenTurnDiff: (turnId: TurnId, filePath?: string, repoRoot?: string) => void;
 }) {
   const ctx = use(TimelineRowCtx);
   const persistedExpanded = useUiStateStore(
@@ -3450,16 +3451,18 @@ function AssistantChangedFilesSectionInner({
         setExpanded(routeThreadKey, turnSummary.turnId, !allDirectoriesExpanded)
       }
       onOpenTurnDiff={onOpenTurnDiff}
-      onFileContextMenu={(filePath, event) =>
+      onFileContextMenu={(filePath, event, repoRoot) =>
         onFileContextMenu(
           {
             environmentId: ctx.activeThreadEnvironmentId,
             filePath,
-            workspaceRoot: ctx.workspaceRoot,
+            // A multi-repo turn records each file's own repository.
+            workspaceRoot: repoRoot ?? ctx.workspaceRoot,
             repositoryRoot:
-              thread?.worktreePath == null
+              repoRoot ??
+              (thread?.worktreePath == null
                 ? activeProject?.repositoryIdentity?.rootPath
-                : undefined,
+                : undefined),
           },
           event,
         )

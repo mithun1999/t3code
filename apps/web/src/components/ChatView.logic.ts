@@ -1123,6 +1123,84 @@ export async function waitForStartedServerThread(
   });
 }
 
+export interface RewoundFile {
+  readonly path: string;
+  readonly repoRoot?: string;
+}
+
+/** Files the turns after `turnCount` changed, once each, for the rewind preview. */
+export function collectRewoundFiles(
+  checkpoints: ReadonlyArray<TurnDiffSummary>,
+  turnCount: number,
+): ReadonlyArray<RewoundFile> {
+  const files = new Map<string, RewoundFile>();
+  for (const checkpoint of checkpoints) {
+    if (checkpoint.checkpointTurnCount <= turnCount) continue;
+    for (const file of checkpoint.files) {
+      const key = `${file.repoRoot ?? ""}\u0000${file.path}`;
+      if (!files.has(key)) {
+        files.set(key, {
+          path: file.path,
+          ...(file.repoRoot === undefined ? {} : { repoRoot: file.repoRoot }),
+        });
+      }
+    }
+  }
+  return [...files.values()];
+}
+
+/** Stops the running turn and resolves once its checkpoint is captured, so a
+    rewind counts the stopped turn like every other. */
+export async function waitForStoppedTurn(
+  threadRef: ScopedThreadRef,
+  turnId: TurnId,
+  stop: () => Promise<void>,
+  timeoutMs = 30_000,
+): Promise<void> {
+  const threadAtom = environmentThreadDetails.detailAtom(threadRef);
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let unsubscribe = () => {};
+    let timeout: ReturnType<typeof globalThis.setTimeout> | undefined;
+    const finish = (error?: unknown) => {
+      if (settled) return;
+      settled = true;
+      if (timeout !== undefined) globalThis.clearTimeout(timeout);
+      unsubscribe();
+      if (error !== undefined) reject(error);
+      else resolve();
+    };
+    const inspect = () => {
+      const thread = appAtomRegistry.get(threadAtom);
+      if (!thread) return;
+      const running =
+        thread.session?.status === "running" || thread.latestTurn?.state === "running";
+      const captured = thread.activities.some(
+        (activity) => activity.kind === "checkpoint.captured" && activity.turnId === turnId,
+      );
+      if (!running && captured) finish();
+    };
+    unsubscribe = appAtomRegistry.subscribe(threadAtom, inspect);
+    timeout = globalThis.setTimeout(() => {
+      finish(new Error("Timed out waiting for the running turn to stop."));
+    }, timeoutMs);
+    Promise.resolve().then(stop).then(inspect, finish);
+  });
+}
+
+/** Hides the rewound prompt and everything after it, so a rewind shows at once
+    while the server forks the agent's session. */
+export function hideRewoundTimelineEntries(
+  entries: TimelineEntry[],
+  rewoundMessageId: MessageId | null,
+): TimelineEntry[] {
+  if (rewoundMessageId === null) return entries;
+  const index = entries.findIndex(
+    (entry) => entry.kind === "message" && entry.message.id === rewoundMessageId,
+  );
+  return index < 0 ? entries : entries.slice(0, index);
+}
+
 export async function waitForRevertedMessage(
   threadRef: ScopedThreadRef,
   messageId: MessageId,
@@ -1195,6 +1273,66 @@ export async function waitForRevertedMessage(
         accepted = true;
         inspect();
       }, finish);
+  });
+}
+
+function activityDetail(activity: { summary: string; payload: unknown }): string {
+  const payload = activity.payload;
+  return typeof payload === "object" &&
+    payload !== null &&
+    "detail" in payload &&
+    typeof payload.detail === "string"
+    ? payload.detail
+    : activity.summary;
+}
+
+/** Waits for a code-only restore, which keeps every message, to report back. */
+export async function waitForRestoredFiles(
+  threadRef: ScopedThreadRef,
+  restore: () => Promise<void>,
+  timeoutMs = 120_000,
+): Promise<string> {
+  const threadAtom = environmentThreadDetails.detailAtom(threadRef);
+  const initial = appAtomRegistry.get(threadAtom);
+  if (!initial) throw new Error("The thread is no longer available.");
+  const reportKinds = new Set(["checkpoint.files.restored", "checkpoint.revert.failed"]);
+  const previousReports = new Set(
+    initial.activities
+      .filter((activity) => reportKinds.has(activity.kind))
+      .map((activity) => activity.id),
+  );
+  return new Promise<string>((resolve, reject) => {
+    let settled = false;
+    let unsubscribe = () => {};
+    let timeout: ReturnType<typeof globalThis.setTimeout> | undefined;
+    const finish = (outcome: { readonly detail: string } | { readonly error: unknown }) => {
+      if (settled) return;
+      settled = true;
+      if (timeout !== undefined) globalThis.clearTimeout(timeout);
+      unsubscribe();
+      if ("error" in outcome) reject(outcome.error);
+      else resolve(outcome.detail);
+    };
+    const inspect = () => {
+      const report = appAtomRegistry
+        .get(threadAtom)
+        ?.activities.findLast(
+          (activity) => reportKinds.has(activity.kind) && !previousReports.has(activity.id),
+        );
+      if (!report) return;
+      if (report.kind === "checkpoint.revert.failed") {
+        finish({ error: new Error(activityDetail(report)) });
+      } else {
+        finish({ detail: activityDetail(report) });
+      }
+    };
+    unsubscribe = appAtomRegistry.subscribe(threadAtom, inspect);
+    timeout = globalThis.setTimeout(() => {
+      finish({ error: new Error("Timed out waiting for files to be restored.") });
+    }, timeoutMs);
+    Promise.resolve()
+      .then(restore)
+      .then(inspect, (error: unknown) => finish({ error }));
   });
 }
 

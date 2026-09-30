@@ -25,6 +25,21 @@ export interface VcsRestoreCheckpointInput {
   readonly fallbackToHead?: boolean;
 }
 
+export interface VcsRestoreCheckpointChangesInput {
+  readonly cwd: string;
+  /** Files return to their state in this checkpoint. */
+  readonly checkpointRef: CheckpointRef;
+  /** Only paths that differ between the two checkpoints are touched. */
+  readonly latestCheckpointRef: CheckpointRef;
+  /** Narrows the paths further to those changed within one of these ranges, so
+      edits made between turns survive. A missing `from` ref counts from the target. */
+  readonly changedWithin?: ReadonlyArray<{
+    readonly fromCheckpointRef: CheckpointRef;
+    readonly toCheckpointRef: CheckpointRef;
+  }>;
+  readonly fallbackToHead?: boolean;
+}
+
 export interface VcsDiffCheckpointsInput {
   readonly cwd: string;
   readonly fromCheckpointRef: CheckpointRef;
@@ -47,6 +62,10 @@ export interface VcsCheckpointOps {
   readonly restoreCheckpoint: (
     input: VcsRestoreCheckpointInput,
   ) => Effect.Effect<boolean, VcsError>;
+  /** Restores changed paths in the working tree only. Null when a ref is missing. */
+  readonly restoreCheckpointChanges: (
+    input: VcsRestoreCheckpointChangesInput,
+  ) => Effect.Effect<ReadonlyArray<string> | null, VcsError>;
   readonly diffCheckpoints: (input: VcsDiffCheckpointsInput) => Effect.Effect<string, VcsError>;
   readonly deleteCheckpointRefs: (
     input: VcsDeleteCheckpointRefsInput,

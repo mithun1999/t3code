@@ -73,6 +73,11 @@ describe("groupedDiffFileTreeEntries", () => {
     expect(groupedDiffFileTreePath(groups, "src/a.ts")).toBe("api/src/a.ts");
     expect(groupedDiffFileTreePath(groups, "missing.ts")).toBeNull();
   });
+
+  it("prefers the named repository when several changed the same path", () => {
+    expect(groupedDiffFileTreePath(groups, "README.md", "web")).toBe("web/README.md");
+    expect(groupedDiffFileTreePath(groups, "src/a.ts", "web")).toBe("api/src/a.ts");
+  });
 });
 
 describe("diffFileTreeEntries", () => {

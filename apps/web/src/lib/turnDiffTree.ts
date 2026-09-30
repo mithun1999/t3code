@@ -16,7 +16,11 @@ export interface TurnDiffTreeDirectoryNode {
 export interface TurnDiffTreeFileNode {
   kind: "file";
   name: string;
+  /** Tree path; starts with the repository's folder name when `repoRoot` is set. */
   path: string;
+  /** Path within the file's repository, as diffs name it. */
+  filePath: string;
+  repoRoot?: string;
   stat: TurnDiffStat | null;
 }
 
@@ -31,6 +35,13 @@ interface MutableDirectoryNode {
 }
 
 const SORT_LOCALE_OPTIONS: Intl.CollatorOptions = { numeric: true, sensitivity: "base" };
+
+/** Last path segment of a repo root. Thread worktrees keep the repo's folder name. */
+export function repoRootBaseName(rootPath: string): string {
+  const trimmed = rootPath.replace(/[/\\]+$/, "");
+  const segments = trimmed.split(/[/\\]/);
+  return segments[segments.length - 1] || trimmed;
+}
 
 function normalizePathSegments(pathValue: string): string[] {
   return pathValue
@@ -120,12 +131,17 @@ export function buildTurnDiffTree(files: ReadonlyArray<TurnDiffFileChange>): Tur
   };
 
   for (const file of files) {
-    const segments = normalizePathSegments(file.path);
-    if (segments.length === 0) {
+    const fileSegments = normalizePathSegments(file.path);
+    if (fileSegments.length === 0) {
       continue;
     }
+    // A thread spanning several repositories gets one top-level folder per repo.
+    const segments =
+      file.repoRoot === undefined
+        ? fileSegments
+        : [repoRootBaseName(file.repoRoot), ...fileSegments];
 
-    const filePath = segments.join("/");
+    const treePath = segments.join("/");
     const fileName = segments.at(-1);
     if (!fileName) {
       continue;
@@ -156,7 +172,9 @@ export function buildTurnDiffTree(files: ReadonlyArray<TurnDiffFileChange>): Tur
     currentDirectory.files.push({
       kind: "file",
       name: fileName,
-      path: filePath,
+      path: treePath,
+      filePath: fileSegments.join("/"),
+      ...(file.repoRoot === undefined ? {} : { repoRoot: file.repoRoot }),
       stat,
     });
 

@@ -30,7 +30,11 @@ import {
   CheckpointWorkspacePathMissingError,
 } from "./Errors.ts";
 import type { CheckpointServiceError } from "./Errors.ts";
-import { checkpointRefForThreadTurn, resolveThreadRepoRoots } from "./Utils.ts";
+import {
+  checkpointRefForThreadTurn,
+  checkpointStartRefForThreadTurn,
+  resolveThreadRepoRoots,
+} from "./Utils.ts";
 import * as CheckpointStore from "./CheckpointStore.ts";
 
 /** Service tag for checkpoint diff queries. */
@@ -103,31 +107,39 @@ export const make = Effect.gen(function* () {
   const diffAcrossRoots = Effect.fn("CheckpointDiffQuery.diffAcrossRoots")(function* (input: {
     readonly roots: ReadonlyArray<string>;
     readonly fromCheckpointRef: CheckpointRef;
+    /** Preferred over `fromCheckpointRef` in roots that recorded it. */
+    readonly fromStartCheckpointRef?: CheckpointRef;
     readonly toCheckpointRef: CheckpointRef;
     readonly ignoreWhitespace: boolean;
     readonly threadId: ThreadId;
   }) {
+    const diffFrom = (root: string, fromCheckpointRef: CheckpointRef) =>
+      checkpointStore.diffCheckpoints({
+        cwd: root,
+        fromCheckpointRef,
+        toCheckpointRef: input.toCheckpointRef,
+        fallbackFromToHead: false,
+        ignoreWhitespace: input.ignoreWhitespace,
+      });
     const segments = yield* Effect.forEach(
       input.roots,
       (root) =>
-        checkpointStore
-          .diffCheckpoints({
-            cwd: root,
-            fromCheckpointRef: input.fromCheckpointRef,
-            toCheckpointRef: input.toCheckpointRef,
-            fallbackFromToHead: false,
-            ignoreWhitespace: input.ignoreWhitespace,
-          })
-          .pipe(
-            Effect.map((diff) => ({ repoRoot: root, diff })),
-            Effect.catch((error) =>
-              Effect.logWarning("turn diff unavailable for root", {
-                threadId: input.threadId,
-                root,
-                detail: error.message,
-              }).pipe(Effect.as({ repoRoot: root, diff: "" })),
-            ),
+        (input.fromStartCheckpointRef === undefined
+          ? diffFrom(root, input.fromCheckpointRef)
+          : diffFrom(root, input.fromStartCheckpointRef).pipe(
+              // Turns captured before start refs existed diff from the previous turn.
+              Effect.catch(() => diffFrom(root, input.fromCheckpointRef)),
+            )
+        ).pipe(
+          Effect.map((diff) => ({ repoRoot: root, diff })),
+          Effect.catch((error) =>
+            Effect.logWarning("turn diff unavailable for root", {
+              threadId: input.threadId,
+              root,
+              detail: error.message,
+            }).pipe(Effect.as({ repoRoot: root, diff: "" })),
           ),
+        ),
       { concurrency: 4 },
     );
     return segments.filter((segment) => segment.diff.trim().length > 0);
@@ -226,6 +238,11 @@ export const make = Effect.gen(function* () {
       const segments = yield* diffAcrossRoots({
         roots,
         fromCheckpointRef,
+        // Starts at the next turn's message, so edits made between turns stay out.
+        fromStartCheckpointRef: checkpointStartRefForThreadTurn(
+          input.threadId,
+          input.fromTurnCount + 1,
+        ),
         toCheckpointRef,
         ignoreWhitespace,
         threadId: input.threadId,

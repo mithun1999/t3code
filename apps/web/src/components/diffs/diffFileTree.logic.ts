@@ -84,14 +84,18 @@ export function groupedDiffFileTreeEntries(
   return entries;
 }
 
-/** The tree path a repo-relative file takes inside a grouped tree, or null when no group has it. */
+/** The tree path a repo-relative file takes inside a grouped tree, or null when no group has it.
+    `preferredLabel` picks the right repo when several changed the same path. */
 export function groupedDiffFileTreePath(
   groups: ReadonlyArray<DiffFileTreeGroup>,
   filePath: string,
+  preferredLabel?: string,
 ): string | null {
-  const group = groups.find((candidate) =>
-    candidate.files.some((file) => resolveFileDiffPath(file) === filePath),
-  );
+  const hasFile = (candidate: DiffFileTreeGroup) =>
+    candidate.files.some((file) => resolveFileDiffPath(file) === filePath);
+  const group =
+    groups.find((candidate) => candidate.label === preferredLabel && hasFile(candidate)) ??
+    groups.find(hasFile);
   return group ? `${group.label}/${filePath}` : null;
 }
 

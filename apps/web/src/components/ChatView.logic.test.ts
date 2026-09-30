@@ -18,6 +18,7 @@ import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentThreadDetails } from "../state/threads";
 
 import type { Thread, ThreadShell, TurnDiffSummary } from "../types";
+import type { TimelineEntry } from "../session-logic";
 import { deriveProviderInstanceEntries, NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
 import type { CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -88,6 +89,8 @@ import {
   shouldWriteThreadErrorToCurrentServerThread,
   waitForRevertedMessage,
   prepareRevertedMessageAttachments,
+  hideRewoundTimelineEntries,
+  collectRewoundFiles,
 } from "./ChatView.logic";
 
 describe("agent browser close confirmation", () => {
@@ -2430,5 +2433,77 @@ describe("worktree setup visibility", () => {
       ...settledDone,
       sequence: 9,
     });
+  });
+});
+
+describe("hideRewoundTimelineEntries", () => {
+  const entry = (id: string, role: "user" | "assistant"): TimelineEntry => ({
+    id,
+    kind: "message",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    message: {
+      id: MessageId.make(id),
+      role,
+      text: id,
+      turnId: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      streaming: false,
+    },
+  });
+  const entries = [
+    entry("first", "user"),
+    entry("first-reply", "assistant"),
+    entry("second", "user"),
+    entry("second-reply", "assistant"),
+  ];
+
+  it("hides the rewound prompt and everything after it", () => {
+    expect(
+      hideRewoundTimelineEntries(entries, MessageId.make("second")).map((item) => item.id),
+    ).toEqual(["first", "first-reply"]);
+  });
+
+  it("leaves the timeline alone without a rewind or once the prompt is gone", () => {
+    expect(hideRewoundTimelineEntries(entries, null)).toBe(entries);
+    expect(hideRewoundTimelineEntries(entries, MessageId.make("missing"))).toBe(entries);
+  });
+});
+
+describe("collectRewoundFiles", () => {
+  const checkpoint = (
+    checkpointTurnCount: number,
+    files: TurnDiffSummary["files"],
+  ): TurnDiffSummary => ({
+    turnId: TurnId.make(`turn-${checkpointTurnCount}`),
+    checkpointTurnCount,
+    checkpointRef: CheckpointRef.make(`refs/t3/checkpoints/thread/turn/${checkpointTurnCount}`),
+    status: "ready",
+    files,
+    assistantMessageId: null,
+    completedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const file = (path: string, repoRoot?: string) => ({
+    path,
+    kind: "modified",
+    additions: 1,
+    deletions: 0,
+    ...(repoRoot === undefined ? {} : { repoRoot }),
+  });
+
+  it("lists each file the later turns changed once, keeping repos apart", () => {
+    const files = collectRewoundFiles(
+      [
+        checkpoint(1, [file("kept.ts")]),
+        checkpoint(2, [file("README.md", "/work/a"), file("README.md", "/work/b")]),
+        checkpoint(3, [file("README.md", "/work/a"), file("new.ts")]),
+      ],
+      1,
+    );
+    expect(files).toEqual([
+      { path: "README.md", repoRoot: "/work/a" },
+      { path: "README.md", repoRoot: "/work/b" },
+      { path: "new.ts" },
+    ]);
   });
 });

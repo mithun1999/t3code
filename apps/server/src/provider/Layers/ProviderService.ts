@@ -2263,6 +2263,60 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     );
   });
 
+  const supportsNativeFileRewind: NonNullable<ProviderServiceMethod<"supportsNativeFileRewind">> =
+    Effect.fn("supportsNativeFileRewind")(function* (threadId) {
+      const routed = yield* resolveRoutableSession({
+        threadId,
+        operation: "ProviderService.supportsNativeFileRewind",
+        allowRecovery: false,
+      });
+      return (
+        routed.adapter.capabilities.supportsNativeFileRewind === true &&
+        routed.adapter.rewindFiles !== undefined
+      );
+    });
+
+  const rewindFiles: NonNullable<ProviderServiceMethod<"rewindFiles">> = Effect.fn("rewindFiles")(
+    function* (input) {
+      if (!Number.isInteger(input.numTurns) || input.numTurns < 0) {
+        return yield* toValidationError(
+          "ProviderService.rewindFiles",
+          "numTurns must be a non-negative integer.",
+        );
+      }
+      if (!(yield* supportsNativeFileRewind(input.threadId))) {
+        return yield* toValidationError(
+          "ProviderService.rewindFiles",
+          "This provider does not restore files from its own checkpoints.",
+        );
+      }
+      // Checkpoints belong to the provider session, so resume it if it stopped.
+      const routed = yield* resolveRoutableSession({
+        threadId: input.threadId,
+        operation: "ProviderService.rewindFiles",
+        allowRecovery: true,
+      });
+      yield* Effect.annotateCurrentSpan({
+        "provider.operation": "rewind-files",
+        "provider.kind": routed.adapter.provider,
+        "provider.thread_id": input.threadId,
+        "provider.rewind_turns": input.numTurns,
+        "provider.rewind_dry_run": input.dryRun === true,
+      });
+      const adapterRewindFiles = routed.adapter.rewindFiles;
+      if (adapterRewindFiles === undefined) {
+        return yield* toValidationError(
+          "ProviderService.rewindFiles",
+          "This provider does not restore files from its own checkpoints.",
+        );
+      }
+      return yield* adapterRewindFiles(routed.threadId, {
+        numTurns: input.numTurns,
+        ...(input.dryRun ? { dryRun: true } : {}),
+      });
+    },
+  );
+
   const uploadFeedback: ProviderServiceMethod<"uploadFeedback"> = Effect.fn("uploadFeedback")(
     function* (rawInput) {
       const input = yield* decodeInputOrValidationError({
@@ -2427,6 +2481,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     getInstanceInfo,
     assertConversationRollbackSupported,
     rollbackConversation,
+    supportsNativeFileRewind,
+    rewindFiles,
     uploadFeedback,
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each

@@ -3,7 +3,7 @@ import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { ThreadId, type VcsError } from "@t3tools/contracts";
+import { type CheckpointRef, ThreadId, type VcsError } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -12,7 +12,7 @@ import * as PlatformError from "effect/PlatformError";
 import * as Scope from "effect/Scope";
 import { describe, expect } from "vite-plus/test";
 
-import { checkpointRefForThreadTurn } from "./Utils.ts";
+import { checkpointRefForThreadTurn, checkpointStartRefForThreadTurn } from "./Utils.ts";
 import { parseTurnDiffFilesFromNumstat } from "./Diffs.ts";
 import * as CheckpointStore from "./CheckpointStore.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
@@ -428,6 +428,111 @@ it.layer(TestLayer)("CheckpointStore.layer", (it) => {
         expect(parseTurnDiffFilesFromNumstat(numstat)).toEqual([
           { path: "README.md", additions: 1, deletions: 1 },
         ]);
+      }),
+    );
+  });
+  describe("restoreCheckpointChanges", () => {
+    it.effect("restores only the files that changed and leaves other work alone", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const fileSystem = yield* FileSystem.FileSystem;
+        const checkpointStore = yield* CheckpointStore.CheckpointStore;
+        const threadId = ThreadId.make("checkpoint-restore-changes");
+        const baseline = checkpointRefForThreadTurn(threadId, 0);
+        const latest = checkpointRefForThreadTurn(threadId, 1);
+        yield* writeTextFile(NodePath.join(tmp, "doomed.txt"), "keep until the agent deletes\n");
+        yield* checkpointStore.captureCheckpoint({ cwd: tmp, checkpointRef: baseline });
+
+        // The agent's turn: edit, create and delete.
+        yield* writeTextFile(NodePath.join(tmp, "README.md"), "# agent edit\n");
+        yield* writeTextFile(NodePath.join(tmp, "created by agent.txt"), "new\n");
+        yield* fileSystem.remove(NodePath.join(tmp, "doomed.txt"));
+        yield* checkpointStore.captureCheckpoint({ cwd: tmp, checkpointRef: latest });
+
+        // Work the restore must not touch: a later unrelated file and staged changes.
+        yield* writeTextFile(NodePath.join(tmp, "mine.txt"), "user work\n");
+        yield* git(tmp, ["add", "mine.txt"]);
+
+        const restored = yield* checkpointStore.restoreCheckpointChanges!({
+          cwd: tmp,
+          checkpointRef: baseline,
+          latestCheckpointRef: latest,
+        });
+        expect([...(restored ?? [])].toSorted()).toEqual([
+          "README.md",
+          "created by agent.txt",
+          "doomed.txt",
+        ]);
+        expect(yield* fileSystem.readFileString(NodePath.join(tmp, "README.md"))).toBe("# test\n");
+        expect(yield* fileSystem.readFileString(NodePath.join(tmp, "doomed.txt"))).toBe(
+          "keep until the agent deletes\n",
+        );
+        expect(yield* fileSystem.exists(NodePath.join(tmp, "created by agent.txt"))).toBe(false);
+        expect(yield* fileSystem.readFileString(NodePath.join(tmp, "mine.txt"))).toBe(
+          "user work\n",
+        );
+        expect(yield* git(tmp, ["diff", "--cached", "--name-only"])).toBe("mine.txt");
+      }),
+    );
+
+    it.effect("keeps edits made between turns when restoring changes made during them", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const fileSystem = yield* FileSystem.FileSystem;
+        const checkpointStore = yield* CheckpointStore.CheckpointStore;
+        const threadId = ThreadId.make("checkpoint-restore-within");
+        const capture = (checkpointRef: CheckpointRef) =>
+          checkpointStore.captureCheckpoint({ cwd: tmp, checkpointRef });
+        const firstStart = checkpointStartRefForThreadTurn(threadId, 1);
+        const firstEnd = checkpointRefForThreadTurn(threadId, 1);
+        const secondStart = checkpointStartRefForThreadTurn(threadId, 2);
+        const secondEnd = checkpointRefForThreadTurn(threadId, 2);
+
+        yield* capture(firstStart);
+        yield* writeTextFile(NodePath.join(tmp, "README.md"), "# turn one\n");
+        yield* capture(firstEnd);
+        // Between turns: the user edits a file the agent never touches.
+        yield* writeTextFile(NodePath.join(tmp, "between.txt"), "user edit\n");
+        yield* capture(secondStart);
+        // The second turn changes a file through a shell command and adds one.
+        yield* writeTextFile(NodePath.join(tmp, "README.md"), "# turn two\n");
+        yield* writeTextFile(NodePath.join(tmp, "shell.txt"), "from a shell\n");
+        yield* capture(secondEnd);
+
+        const restored = yield* checkpointStore.restoreCheckpointChanges!({
+          cwd: tmp,
+          checkpointRef: firstStart,
+          latestCheckpointRef: secondEnd,
+          changedWithin: [
+            { fromCheckpointRef: firstStart, toCheckpointRef: firstEnd },
+            { fromCheckpointRef: secondStart, toCheckpointRef: secondEnd },
+          ],
+        });
+        expect([...(restored ?? [])].toSorted()).toEqual(["README.md", "shell.txt"]);
+        expect(yield* fileSystem.readFileString(NodePath.join(tmp, "README.md"))).toBe("# test\n");
+        expect(yield* fileSystem.exists(NodePath.join(tmp, "shell.txt"))).toBe(false);
+        expect(yield* fileSystem.readFileString(NodePath.join(tmp, "between.txt"))).toBe(
+          "user edit\n",
+        );
+      }),
+    );
+
+    it.effect("returns null when a checkpoint is missing", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const checkpointStore = yield* CheckpointStore.CheckpointStore;
+        const threadId = ThreadId.make("checkpoint-restore-missing");
+        const latest = checkpointRefForThreadTurn(threadId, 1);
+        yield* checkpointStore.captureCheckpoint({ cwd: tmp, checkpointRef: latest });
+        const restored = yield* checkpointStore.restoreCheckpointChanges!({
+          cwd: tmp,
+          checkpointRef: checkpointRefForThreadTurn(threadId, 0),
+          latestCheckpointRef: latest,
+        });
+        expect(restored).toBeNull();
       }),
     );
   });

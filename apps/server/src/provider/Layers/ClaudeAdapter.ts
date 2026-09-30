@@ -18,6 +18,7 @@ import {
   type PermissionMode,
   type PermissionResult,
   type PermissionUpdate,
+  type RewindFilesResult,
   type SDKMessage,
   type SDKRateLimitInfo,
   type SDKResultMessage,
@@ -186,6 +187,7 @@ const remapClaudeForkTurnBoundaries = (
   forkMessages: ReadonlyArray<ClaudeHistoryMessage>,
   firstRemoved: number,
   retainedBoundaries: ReadonlyArray<string | null>,
+  undeliveredBoundaries: ReadonlySet<string> = new Set(),
 ): Array<string | null> | undefined => {
   const retainedConversation = messages.slice(0, firstRemoved).filter(isClaudeConversationMessage);
   const forkConversation = forkMessages.filter(isClaudeConversationMessage);
@@ -210,6 +212,7 @@ const remapClaudeForkTurnBoundaries = (
   }
   const remapped = retainedBoundaries.map((originalId) => {
     if (originalId === null) return null;
+    if (undeliveredBoundaries.has(originalId)) return originalId;
     const originalIndex = conversationIndexForUuid(messages, originalId);
     const forkIndex = originalIndex + offset;
     const forkMessage =
@@ -249,12 +252,24 @@ type PromptQueueItem =
       readonly type: "terminate";
     };
 
+/**
+ * Where a turn's file checkpoint lives. Claude keys checkpoints by the prompt's
+ * message id inside the session that ran the turn. A conversation rollback forks
+ * the session and the fork does not inherit earlier checkpoints, so retained
+ * turns keep pointing at the session that recorded them.
+ */
+export interface ClaudeTurnCheckpoint {
+  readonly sessionId: string;
+  readonly messageId: string;
+}
+
 interface ClaudeResumeState {
   readonly threadId?: ThreadId;
   readonly resume?: string;
   readonly resumeSessionAt?: string;
   readonly turnCount?: number;
   readonly turnStartMessageIds?: ReadonlyArray<string | null>;
+  readonly turnCheckpoints?: ReadonlyArray<ClaudeTurnCheckpoint | null>;
 }
 
 interface ClaudeTurnState {
@@ -409,6 +424,10 @@ interface ClaudeSessionContext {
   session: ProviderSession;
   startInput: Parameters<ClaudeAdapterShape["startSession"]>[0];
   readonly turnStartMessageIds: Array<string | null>;
+  /** Parallel to turnStartMessageIds. Null when the turn has no checkpoint. */
+  readonly turnCheckpoints: Array<ClaudeTurnCheckpoint | null>;
+  /** Options for resuming an earlier session only to rewind its files. */
+  readonly checkpointQueryOptions: ClaudeQueryOptions;
   readonly promptQueue: Queue.Queue<PromptQueueItem>;
   readonly query: ClaudeQueryRuntime;
   streamFiber: Fiber.Fiber<void, Error> | undefined;
@@ -460,6 +479,10 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
   readonly setModel: (model?: string) => Promise<void>;
   readonly setPermissionMode: (mode: PermissionMode) => Promise<void>;
   readonly setMaxThinkingTokens: (maxThinkingTokens: number | null) => Promise<void>;
+  readonly rewindFiles?: (
+    userMessageId: string,
+    options?: { dryRun?: boolean },
+  ) => Promise<RewindFilesResult>;
   readonly close: () => void;
 }
 
@@ -966,6 +989,40 @@ function asRuntimeRequestId(value: ApprovalRequestId): RuntimeRequestId {
   return RuntimeRequestId.make(value);
 }
 
+function isClaudeTurnCheckpointOrNull(value: unknown): boolean {
+  if (value === null) return true;
+  if (typeof value !== "object") return false;
+  const candidate = value as { sessionId?: unknown; messageId?: unknown };
+  return (
+    typeof candidate.sessionId === "string" &&
+    isUuid(candidate.sessionId) &&
+    typeof candidate.messageId === "string" &&
+    candidate.messageId.length > 0
+  );
+}
+
+/**
+ * Orders the checkpoint rewinds that return files to their state before
+ * `checkpoints[0]`. Each later session is rewound to its own first turn,
+ * newest first, which undoes what it changed. The target's session goes last
+ * and restores everything older. Turns without checkpoints after the target
+ * (background replies) have nothing of their own to rewind and are skipped.
+ * Returns undefined when the target itself has no checkpoint.
+ */
+export function planClaudeFileRewind(
+  checkpoints: ReadonlyArray<ClaudeTurnCheckpoint | null>,
+): ReadonlyArray<ClaudeTurnCheckpoint> | undefined {
+  const [target] = checkpoints;
+  if (!target) return undefined;
+  const firstTurnBySession = new Map<string, ClaudeTurnCheckpoint>();
+  for (const checkpoint of checkpoints) {
+    if (checkpoint && !firstTurnBySession.has(checkpoint.sessionId)) {
+      firstTurnBySession.set(checkpoint.sessionId, checkpoint);
+    }
+  }
+  return [...firstTurnBySession.values()].toReversed();
+}
+
 function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undefined {
   if (!resumeCursor || typeof resumeCursor !== "object") {
     return undefined;
@@ -977,6 +1034,7 @@ function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undef
     resumeSessionAt?: unknown;
     turnCount?: unknown;
     turnStartMessageIds?: unknown;
+    turnCheckpoints?: unknown;
   };
 
   const threadIdCandidate = typeof cursor.threadId === "string" ? cursor.threadId : undefined;
@@ -999,12 +1057,21 @@ function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undef
     cursor.turnStartMessageIds.every((id: unknown) => id === null || typeof id === "string")
       ? (cursor.turnStartMessageIds as Array<string | null>)
       : undefined;
+  // Checkpoints only line up with turns when both lists describe the same turns.
+  const turnCheckpoints =
+    turnStartMessageIds &&
+    Array.isArray(cursor.turnCheckpoints) &&
+    cursor.turnCheckpoints.length === turnStartMessageIds.length &&
+    cursor.turnCheckpoints.every(isClaudeTurnCheckpointOrNull)
+      ? (cursor.turnCheckpoints as Array<ClaudeTurnCheckpoint | null>)
+      : undefined;
 
   return {
     ...(threadId ? { threadId } : {}),
     ...(resume ? { resume } : {}),
     ...(resumeSessionAt ? { resumeSessionAt } : {}),
     ...(turnStartMessageIds ? { turnStartMessageIds } : {}),
+    ...(turnCheckpoints ? { turnCheckpoints } : {}),
     ...(turnCountValue !== undefined && Number.isInteger(turnCountValue) && turnCountValue >= 0
       ? { turnCount: turnCountValue }
       : {}),
@@ -2192,6 +2259,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       ...(context.lastAssistantUuid ? { resumeSessionAt: context.lastAssistantUuid } : {}),
       turnCount: context.turnStartMessageIds.length,
       turnStartMessageIds: [...context.turnStartMessageIds],
+      turnCheckpoints: [...context.turnCheckpoints],
     };
 
     context.session = {
@@ -3364,6 +3432,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const turnId = TurnId.make(yield* randomUUIDv4);
       const startedAt = yield* nowIso;
       context.turnStartMessageIds.push(message.uuid);
+      context.turnCheckpoints.push(null);
       context.turnState = {
         turnId,
         startedAt,
@@ -4249,7 +4318,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
   const stopSessionInternal = Effect.fn("stopSessionInternal")(function* (
     context: ClaudeSessionContext,
-    options?: { readonly emitExitEvent?: boolean },
+    options?: {
+      readonly emitExitEvent?: boolean;
+      /** False lets the process exit in the background, for a session being replaced. */
+      readonly awaitProcessExit?: boolean;
+    },
   ) {
     if (context.stopped) return;
 
@@ -4324,7 +4397,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     const streamFiber = context.streamFiber;
     context.streamFiber = undefined;
     if (streamFiber && streamFiber.pollUnsafe() === undefined) {
-      yield* Fiber.interrupt(streamFiber);
+      // `stopped` already ends the stream at its next message, so nothing the old
+      // process still prints reaches the thread.
+      if (options?.awaitProcessExit === false) {
+        yield* Fiber.interrupt(streamFiber).pipe(Effect.forkDetach);
+      } else {
+        yield* Fiber.interrupt(streamFiber);
+      }
     }
 
     const updatedAt = yield* nowIso;
@@ -4942,6 +5021,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(existingResumeSessionId ? { resume: existingResumeSessionId } : {}),
         ...(newSessionId ? { sessionId: newSessionId } : {}),
         includePartialMessages: true,
+        // Backs "Restore code": Claude keeps a copy of each file before its edit
+        // tools change it, like Claude Code's /rewind.
+        enableFileCheckpointing: true,
         canUseTool,
         onUserDialog,
         supportedDialogKinds: ["resume_return"],
@@ -4988,6 +5070,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         "claude.query.path_to_executable": claudeBinaryPath,
       });
 
+      // Resuming an earlier session to rewind its files needs no model, tools,
+      // hooks or settings; skipping settings keeps user hooks from running.
+      const checkpointQueryOptions: ClaudeQueryOptions = {
+        ...(input.cwd ? { cwd: input.cwd } : {}),
+        pathToClaudeCodeExecutable: claudeBinaryPath,
+        settingSources: [],
+        env: claudeEnvironment,
+        additionalDirectories,
+        enableFileCheckpointing: true,
+      };
+
       const queryRuntime = yield* Effect.try({
         try: () =>
           createQuery({
@@ -5020,6 +5113,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           ...(resumeState?.turnStartMessageIds
             ? { turnStartMessageIds: resumeState.turnStartMessageIds }
             : {}),
+          ...(resumeState?.turnCheckpoints ? { turnCheckpoints: resumeState.turnCheckpoints } : {}),
         },
         createdAt: startedAt,
         updatedAt: startedAt,
@@ -5031,6 +5125,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         turnStartMessageIds: resumeState?.turnStartMessageIds
           ? [...resumeState.turnStartMessageIds]
           : Array.from({ length: resumeState?.turnCount ?? 0 }, () => null),
+        turnCheckpoints: resumeState?.turnCheckpoints
+          ? [...resumeState.turnCheckpoints]
+          : Array.from(
+              { length: resumeState?.turnStartMessageIds?.length ?? resumeState?.turnCount ?? 0 },
+              () => null,
+            ),
+        checkpointQueryOptions,
         promptQueue,
         query: queryRuntime,
         streamFiber: undefined,
@@ -5264,7 +5365,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       ),
     });
 
-    if (steeringTurnState === null) context.turnStartMessageIds.push(turnId);
+    if (steeringTurnState === null) {
+      context.turnStartMessageIds.push(turnId);
+      // Claude checkpoints files at each prompt that starts a turn, keyed by its id.
+      context.turnCheckpoints.push(
+        context.resumeSessionId ? { sessionId: context.resumeSessionId, messageId: turnId } : null,
+      );
+    }
     yield* updateResumeCursor(context);
     yield* Queue.offer(context.promptQueue, {
       type: "message",
@@ -5300,6 +5407,121 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     },
   );
 
+  // Rewinds one session's files. The live session answers directly; an earlier
+  // session is resumed without a prompt, which leaves its transcript untouched.
+  const rewindCheckpoint = (
+    threadId: ThreadId,
+    context: ClaudeSessionContext,
+    checkpoint: ClaudeTurnCheckpoint,
+    dryRun: boolean,
+  ) =>
+    Effect.tryPromise({
+      try: async (): Promise<RewindFilesResult> => {
+        if (checkpoint.sessionId === context.resumeSessionId) {
+          if (!context.query.rewindFiles) throw new Error("Claude runtime cannot rewind files.");
+          return context.query.rewindFiles(checkpoint.messageId, { dryRun });
+        }
+        let release = () => {};
+        const released = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const prompt: AsyncIterable<SDKUserMessage> = {
+          [Symbol.asyncIterator]: () => ({
+            next: () => released.then(() => ({ done: true as const, value: undefined })),
+          }),
+        };
+        const earlier = createQuery({
+          prompt,
+          options: { ...context.checkpointQueryOptions, resume: checkpoint.sessionId },
+        });
+        try {
+          if (!earlier.rewindFiles) throw new Error("Claude runtime cannot rewind files.");
+          return await earlier.rewindFiles(checkpoint.messageId, { dryRun });
+        } finally {
+          release();
+          earlier.close();
+        }
+      },
+      catch: (cause) => toRequestError(threadId, "thread/rewindFiles", cause),
+    });
+
+  const rewindFiles: NonNullable<ClaudeAdapterShape["rewindFiles"]> = Effect.fn("rewindFiles")(
+    function* (threadId, input) {
+      const context = yield* requireSession(threadId);
+      const targetIndex = context.turnCheckpoints.length - input.numTurns;
+      if (!Number.isInteger(input.numTurns) || input.numTurns < 0 || targetIndex < 0) {
+        return yield* new ProviderAdapterValidationError({
+          provider: PROVIDER,
+          operation: "rewindFiles",
+          issue: `numTurns must be an integer from 0 to ${context.turnCheckpoints.length}.`,
+        });
+      }
+      if (context.turnState) {
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "thread/rewindFiles",
+          detail: "Stop the running turn before restoring files.",
+        });
+      }
+      if (input.numTurns === 0) {
+        return { canRewind: true, filesChanged: [] };
+      }
+      const plan = planClaudeFileRewind(context.turnCheckpoints.slice(targetIndex));
+      if (!plan) {
+        return {
+          canRewind: false,
+          filesChanged: [],
+          error:
+            "Claude has no file checkpoint for this message. Checkpoints exist only for prompts sent after file restore was turned on.",
+        };
+      }
+
+      // Preview every step first so a missing checkpoint never leaves files half restored.
+      const filesChanged = new Set<string>();
+      let insertions = 0;
+      let deletions = 0;
+      for (const checkpoint of plan) {
+        const preview = yield* rewindCheckpoint(threadId, context, checkpoint, true);
+        if (!preview.canRewind) {
+          return {
+            canRewind: false,
+            filesChanged: [],
+            error: preview.error ?? "Claude could not restore files for this message.",
+          };
+        }
+        for (const file of preview.filesChanged ?? []) filesChanged.add(file);
+        insertions += preview.insertions ?? 0;
+        deletions += preview.deletions ?? 0;
+      }
+      if (input.dryRun) {
+        return { canRewind: true, filesChanged: [...filesChanged], insertions, deletions };
+      }
+
+      let skippedFiles = 0;
+      for (const [index, checkpoint] of plan.entries()) {
+        const result = yield* rewindCheckpoint(threadId, context, checkpoint, false);
+        if (!result.canRewind) {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "thread/rewindFiles",
+            detail:
+              index === 0
+                ? (result.error ?? "Claude could not restore files for this message.")
+                : `Files were only partly restored: ${result.error ?? "a checkpoint could not be applied"}.`,
+          });
+        }
+        skippedFiles += result.skippedLinks ?? 0;
+      }
+      return {
+        canRewind: true,
+        filesChanged: [...filesChanged],
+        insertions,
+        deletions,
+        ...(skippedFiles > 0 ? { skippedFiles } : {}),
+      };
+    },
+  );
+
   const rollbackThread: ClaudeAdapterShape["rollbackThread"] = Effect.fn("rollbackThread")(
     function* (threadId, numTurns) {
       const context = yield* requireSession(threadId);
@@ -5315,7 +5537,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         context.turnStartMessageIds.every((id) => id !== null) &&
         numTurns >= context.turnStartMessageIds.length
       ) {
-        yield* stopSessionInternal(context, { emitExitEvent: false });
+        yield* stopSessionInternal(context, { emitExitEvent: false, awaitProcessExit: false });
         yield* startSession({
           ...context.startInput,
           runtimeMode: context.session.runtimeMode,
@@ -5415,12 +5637,34 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         );
       }
       const retainedCount = Math.max(0, boundaries.length - numTurns);
-      const firstRemovedId = boundaries[retainedCount];
-      const firstRemoved = messages.findIndex((message) => message.uuid === firstRemovedId);
+      const boundaryIndexes = boundaries.map((id) =>
+        messages.findIndex((message) => message.uuid === id),
+      );
+      // A prompt stopped while still queued never reaches the transcript. Only
+      // trust that when Claude read no prompt at all between the neighbouring
+      // turns; compaction and lost boundaries must still refuse.
+      const isUndelivered = (index: number): boolean => {
+        if (boundaryIndexes[index]! >= 0) return false;
+        const previous = boundaryIndexes.slice(0, index).findLast((found) => found >= 0);
+        if (previous === undefined) return false;
+        const next = boundaryIndexes.slice(index + 1).find((found) => found >= 0);
+        return !messages.slice(previous + 1, next ?? messages.length).some(isClaudeHumanTurnStart);
+      };
+      const undeliveredBoundaries = new Set(
+        boundaries.flatMap((id, index) => (id !== null && isUndelivered(index) ? [id] : [])),
+      );
+      // The first removed turn Claude actually read decides where the fork ends.
+      const firstRemoved = boundaryIndexes.slice(retainedCount).find((index) => index >= 0) ?? -1;
+      const removedTurnsReachedClaude = firstRemoved >= 0;
+      const firstRemovedId = boundaries[retainedCount] ?? null;
+      const firstRemovedLost =
+        firstRemovedId !== null &&
+        boundaryIndexes[retainedCount]! < 0 &&
+        !undeliveredBoundaries.has(firstRemovedId);
       if (
         boundaries.length === 0 ||
         boundaries.some((id) => id === null) ||
-        (retainedCount > 0 && firstRemoved < 1)
+        (retainedCount > 0 && (firstRemoved === 0 || firstRemovedLost))
       ) {
         return yield* new ProviderAdapterRequestError({
           provider: PROVIDER,
@@ -5429,7 +5673,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             "The exact Claude turn boundary is unavailable, possibly after compaction or recovery of older history. Start a new thread instead.",
         });
       }
-      const rollbackAt = retainedCount > 0 ? messages[firstRemoved - 1]?.uuid : undefined;
+      const rollbackAt =
+        retainedCount > 0 && removedTurnsReachedClaude
+          ? messages[firstRemoved - 1]?.uuid
+          : undefined;
       const retainedTurns = context.turns.slice(0, Math.max(0, context.turns.length - numTurns));
       const fork = rollbackAt
         ? yield* Effect.tryPromise({
@@ -5448,6 +5695,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           })
         : undefined;
       const retainedBoundaries = boundaries.slice(0, retainedCount);
+      // The fork starts without earlier checkpoints; kept turns stay pointed at
+      // the session that recorded them.
+      const retainedCheckpoints = context.turnCheckpoints.slice(0, retainedCount);
       if (fork) {
         const forkMessages = yield* readHistory(fork.sessionId);
         const remappedBoundaries = remapClaudeForkTurnBoundaries(
@@ -5455,6 +5705,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           forkMessages,
           firstRemoved,
           retainedBoundaries,
+          undeliveredBoundaries,
         );
         if (!remappedBoundaries) {
           return yield* new ProviderAdapterRequestError({
@@ -5465,7 +5716,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         }
         retainedBoundaries.splice(0, retainedBoundaries.length, ...remappedBoundaries);
       }
-      yield* stopSessionInternal(context, { emitExitEvent: false });
+      // Removed turns that never reached Claude leave its history untouched.
+      const keepSession = retainedCount > 0 && !removedTurnsReachedClaude;
+      // Resuming the same session must wait for the old process to let go of it.
+      yield* stopSessionInternal(context, {
+        emitExitEvent: false,
+        awaitProcessExit: keepSession,
+      });
       yield* startSession({
         ...context.startInput,
         runtimeMode: context.session.runtimeMode,
@@ -5474,8 +5731,19 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
               resume: fork.sessionId,
               turnCount: retainedCount,
               turnStartMessageIds: retainedBoundaries,
+              turnCheckpoints: retainedCheckpoints,
             }
-          : undefined,
+          : keepSession
+            ? {
+                resume: sessionId,
+                ...(context.lastAssistantUuid
+                  ? { resumeSessionAt: context.lastAssistantUuid }
+                  : {}),
+                turnCount: retainedCount,
+                turnStartMessageIds: retainedBoundaries,
+                turnCheckpoints: retainedCheckpoints,
+              }
+            : undefined,
       });
       const restarted = yield* requireSession(threadId);
       restarted.turns.push(...retainedTurns);
@@ -5567,6 +5835,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     provider: PROVIDER,
     capabilities: {
       sessionModelSwitch: "in-session",
+      supportsNativeFileRewind: true,
     },
     compaction: { type: "slash-command", command: "/compact" },
     startSession,
@@ -5574,6 +5843,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     interruptTurn,
     readThread,
     rollbackThread,
+    rewindFiles,
     respondToRequest,
     respondToUserInput,
     stopSession,

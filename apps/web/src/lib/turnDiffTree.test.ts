@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildTurnDiffTree, summarizeTurnDiffStats } from "./turnDiffTree";
+import { buildTurnDiffTree, repoRootBaseName, summarizeTurnDiffStats } from "./turnDiffTree";
 
 describe("summarizeTurnDiffStats", () => {
   it("sums only files with numeric additions/deletions", () => {
@@ -39,6 +39,7 @@ describe("buildTurnDiffTree", () => {
                 kind: "file",
                 name: "Button.tsx",
                 path: "src/components/Button.tsx",
+                filePath: "src/components/Button.tsx",
                 stat: { additions: 4, deletions: 2 },
               },
             ],
@@ -47,6 +48,7 @@ describe("buildTurnDiffTree", () => {
             kind: "file",
             name: "index.ts",
             path: "src/index.ts",
+            filePath: "src/index.ts",
             stat: { additions: 2, deletions: 1 },
           },
         ],
@@ -55,6 +57,7 @@ describe("buildTurnDiffTree", () => {
         kind: "file",
         name: "README.md",
         path: "README.md",
+        filePath: "README.md",
         stat: { additions: 1, deletions: 0 },
       },
     ]);
@@ -77,12 +80,14 @@ describe("buildTurnDiffTree", () => {
             kind: "file",
             name: "notes.md",
             path: "docs/notes.md",
+            filePath: "docs/notes.md",
             stat: { additions: 0, deletions: 0 },
           },
           {
             kind: "file",
             name: "todo.md",
             path: "docs/todo.md",
+            filePath: "docs/todo.md",
             stat: { additions: 1, deletions: 1 },
           },
         ],
@@ -106,6 +111,7 @@ describe("buildTurnDiffTree", () => {
             kind: "file",
             name: "index.ts",
             path: "apps/web/src/index.ts",
+            filePath: "apps/web/src/index.ts",
             stat: { additions: 2, deletions: 1 },
           },
         ],
@@ -136,6 +142,7 @@ describe("buildTurnDiffTree", () => {
                 kind: "file",
                 name: "index.ts",
                 path: "apps/server/src/index.ts",
+                filePath: "apps/server/src/index.ts",
                 stat: { additions: 2, deletions: 1 },
               },
             ],
@@ -144,6 +151,7 @@ describe("buildTurnDiffTree", () => {
             kind: "file",
             name: "main.ts",
             path: "apps/server/main.ts",
+            filePath: "apps/server/main.ts",
             stat: { additions: 4, deletions: 0 },
           },
         ],
@@ -164,5 +172,66 @@ describe("buildTurnDiffTree", () => {
     );
     expect(directoryNodes.map((node) => node.name).toSorted()).toEqual([" a", "a"]);
     expect(directoryNodes.map((node) => node.path).toSorted()).toEqual([" a", "a"]);
+  });
+});
+
+describe("buildTurnDiffTree with several repositories", () => {
+  it("puts each repository's files under a folder named after it", () => {
+    const tree = buildTurnDiffTree([
+      {
+        path: "README.md",
+        kind: "modified",
+        additions: 1,
+        deletions: 0,
+        repoRoot: "/work/repo-a",
+      },
+      {
+        path: "README.md",
+        kind: "modified",
+        additions: 2,
+        deletions: 1,
+        repoRoot: "/work/repo-b/",
+      },
+    ]);
+
+    expect(tree).toEqual([
+      {
+        kind: "directory",
+        name: "repo-a",
+        path: "repo-a",
+        stat: { additions: 1, deletions: 0 },
+        children: [
+          {
+            kind: "file",
+            name: "README.md",
+            path: "repo-a/README.md",
+            filePath: "README.md",
+            repoRoot: "/work/repo-a",
+            stat: { additions: 1, deletions: 0 },
+          },
+        ],
+      },
+      {
+        kind: "directory",
+        name: "repo-b",
+        path: "repo-b",
+        stat: { additions: 2, deletions: 1 },
+        children: [
+          {
+            kind: "file",
+            name: "README.md",
+            path: "repo-b/README.md",
+            filePath: "README.md",
+            repoRoot: "/work/repo-b/",
+            stat: { additions: 2, deletions: 1 },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("names a repository by its folder", () => {
+    expect(repoRootBaseName("/work/repo-a/")).toBe("repo-a");
+    expect(repoRootBaseName("C:\\work\\repo-b")).toBe("repo-b");
   });
 });

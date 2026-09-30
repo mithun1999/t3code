@@ -1668,6 +1668,108 @@ describe("deriveMessagesTimelineRows", () => {
     expect(assistantRow?.assistantTurnDiffSummary).toBe(assistantTurnDiffSummary);
   });
 
+  it("offers rewind on the running turn's prompt", () => {
+    const userEntry = (id: string, createdAt: string) => ({
+      id: `${id}-entry`,
+      kind: "message" as const,
+      createdAt,
+      message: {
+        id: id as never,
+        role: "user" as const,
+        text: id,
+        turnId: null,
+        createdAt,
+        updatedAt: createdAt,
+        streaming: false,
+      },
+    });
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        userEntry("done", "2026-01-01T00:00:00Z"),
+        userEntry("running", "2026-01-01T00:01:00Z"),
+      ],
+      isWorking: true,
+      activeTurnStartedAt: "2026-01-01T00:01:00Z",
+      runningTurnId: "turn-running" as never,
+      turnDiffSummaries: [
+        {
+          turnId: "turn-done" as never,
+          completedAt: "2026-01-01T00:00:30Z",
+          assistantMessageId: null,
+          userMessageId: "done" as never,
+          checkpointTurnCount: 1,
+          checkpointRef: "checkpoint-1" as never,
+          status: "ready" as const,
+          files: [],
+        },
+      ],
+      supportsConversationRollback: true,
+    }).flatMap((row) =>
+      row.kind === "message" ? [[row.message.id, row.revertTurnCount] as const] : [],
+    );
+
+    expect(rows).toEqual([
+      ["done", 0],
+      ["running", 1],
+    ]);
+  });
+
+  it("offers rewind on a user message whose turn was stopped before any reply", () => {
+    const userMessage = (id: string, createdAt: string) => ({
+      id: `${id}-entry`,
+      kind: "message" as const,
+      createdAt,
+      message: {
+        id: id as never,
+        role: "user" as const,
+        text: "Edit the files",
+        turnId: null,
+        createdAt,
+        updatedAt: createdAt,
+        streaming: false,
+      },
+    });
+    const stoppedSummary = (
+      turnId: string,
+      checkpointTurnCount: number,
+      userMessageId: string,
+    ) => ({
+      turnId: turnId as never,
+      completedAt: "2026-01-01T00:00:30Z",
+      assistantMessageId: `assistant:${turnId}` as never,
+      userMessageId: userMessageId as never,
+      checkpointTurnCount,
+      checkpointRef: `checkpoint-${checkpointTurnCount}` as never,
+      status: "missing" as const,
+      files: [{ path: "src/half.ts", kind: "modified", additions: 2, deletions: 0 }],
+    });
+    const rowsFor = (supportsConversationRollback: boolean) =>
+      deriveMessagesTimelineRows({
+        timelineEntries: [
+          userMessage("user-1", "2026-01-01T00:00:00Z"),
+          userMessage("user-2", "2026-01-01T00:01:00Z"),
+          userMessage("user-3", "2026-01-01T00:02:00Z"),
+        ],
+        isWorking: false,
+        activeTurnStartedAt: null,
+        turnDiffSummaries: [
+          stoppedSummary("turn-1", 1, "user-1"),
+          stoppedSummary("turn-2", 2, "user-2"),
+          stoppedSummary("turn-3", 3, "user-2"),
+        ],
+        supportsConversationRollback,
+      }).flatMap((row) =>
+        row.kind === "message" ? [[row.message.id, row.revertTurnCount] as const] : [],
+      );
+
+    expect(rowsFor(true)).toEqual([
+      ["user-1", 0],
+      ["user-2", 1],
+      ["user-3", undefined],
+    ]);
+    expect(rowsFor(false).every(([, turnCount]) => turnCount === undefined)).toBe(true);
+  });
+
   it("folds the first assistant message and settled work before the terminal response", () => {
     const timelineEntries = [
       {

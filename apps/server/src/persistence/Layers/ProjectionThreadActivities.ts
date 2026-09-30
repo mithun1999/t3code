@@ -12,6 +12,7 @@ import { toPersistenceDecodeError, toPersistenceSqlError } from "../Errors.ts";
 import {
   DeleteProjectionThreadActivitiesInput,
   ListProjectionThreadActivitiesInput,
+  ListEditedFilePathsInput,
   GetLatestProjectionThreadTaskActivityInput,
   ProjectionThreadActivity,
   ProjectionThreadActivityRepository,
@@ -122,6 +123,27 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
           sequence ASC,
           created_at ASC,
           activity_id ASC
+      `,
+  });
+
+  const listEditedFilePathRows = SqlSchema.findAll({
+    Request: ListEditedFilePathsInput,
+    Result: Schema.Struct({ filePath: Schema.NullOr(Schema.String) }),
+    execute: ({ threadId, turnIds }) =>
+      sql`
+        SELECT COALESCE(
+          json_extract(payload_json, '$.data.input.file_path'),
+          json_extract(payload_json, '$.data.input.notebook_path')
+        ) AS "filePath"
+        FROM projection_thread_activities
+        WHERE thread_id = ${threadId}
+          AND ${sql.in("turn_id", turnIds)}
+          AND kind = 'tool.completed'
+          AND CASE
+            WHEN json_valid(payload_json)
+              THEN json_extract(payload_json, '$.itemType') = 'file_change'
+            ELSE 0
+          END
       `,
   });
 
@@ -244,6 +266,21 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
       Effect.map(Option.map(toProjectionThreadActivity)),
     );
 
+  const listEditedFilePaths: ProjectionThreadActivityRepositoryShape["listEditedFilePaths"] = (
+    input,
+  ) =>
+    input.turnIds.length === 0
+      ? Effect.succeed([])
+      : listEditedFilePathRows(input).pipe(
+          Effect.mapError(
+            toPersistenceSqlOrDecodeError(
+              "ProjectionThreadActivityRepository.listEditedFilePaths:query",
+              "ProjectionThreadActivityRepository.listEditedFilePaths:decodeRows",
+            ),
+          ),
+          Effect.map((rows) => rows.map((row) => row.filePath)),
+        );
+
   const deleteByThreadId: ProjectionThreadActivityRepositoryShape["deleteByThreadId"] = (input) =>
     deleteProjectionThreadActivityRows(input).pipe(
       Effect.mapError(
@@ -256,6 +293,7 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
     listByThreadId,
     listUserInputLifecycleByThreadId,
     getLatestTaskActivity,
+    listEditedFilePaths,
     deleteByThreadId,
   } satisfies ProjectionThreadActivityRepositoryShape;
 });

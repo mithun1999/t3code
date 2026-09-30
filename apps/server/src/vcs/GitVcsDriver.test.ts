@@ -1116,3 +1116,22 @@ it.effect("GitVcsDriver flushes checkpoint objects and refs to disk before publi
     ),
   );
 });
+
+it("reads restorable checkpoint changes and skips nested repositories", () => {
+  const raw = [
+    `:100644 100644 ${"a".repeat(40)} ${"b".repeat(40)} M`,
+    "src/edited.ts",
+    `:000000 100644 ${"0".repeat(40)} ${"c".repeat(40)} A`,
+    "created\tby agent.ts",
+    `:100644 000000 ${"d".repeat(40)} ${"0".repeat(40)} D`,
+    "deleted.ts",
+    `:160000 160000 ${"e".repeat(40)} ${"f".repeat(40)} M`,
+    "nested-repo",
+    "",
+  ].join("\0");
+  assert.deepEqual(GitVcsDriver.parseCheckpointChanges(raw), {
+    restore: ["src/edited.ts", "deleted.ts"],
+    remove: ["created\tby agent.ts"],
+  });
+  assert.deepEqual(GitVcsDriver.parseCheckpointChanges(""), { restore: [], remove: [] });
+});

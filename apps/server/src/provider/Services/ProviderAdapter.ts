@@ -52,6 +52,27 @@ export interface ProviderAdapterCapabilities {
   readonly promptlessTurnContinuation?: boolean;
   /** False when native conversation history cannot be rewound. */
   readonly supportsConversationRollback?: boolean;
+  /** True when the agent restores the files its own edit tools changed, without
+      git or an isolated worktree. Requires `rewindFiles`. */
+  readonly supportsNativeFileRewind?: boolean;
+}
+
+export interface ProviderFileRewindInput {
+  /** Latest turns whose file changes to undo, counted like `rollbackThread`. */
+  readonly numTurns: number;
+  /** Report what would change without writing files. */
+  readonly dryRun?: boolean;
+}
+
+export interface ProviderFileRewindResult {
+  readonly canRewind: boolean;
+  readonly error?: string;
+  /** Absolute paths. Only reported by a dry run. */
+  readonly filesChanged: ReadonlyArray<string>;
+  readonly insertions?: number;
+  readonly deletions?: number;
+  /** Tracked paths left alone because they were links or unsafe to restore. */
+  readonly skippedFiles?: number;
 }
 
 export interface ProviderThreadTurnSnapshot {
@@ -138,6 +159,15 @@ export interface ProviderAdapterShape<TError> {
     threadId: ThreadId,
     numTurns: number,
   ) => Effect.Effect<ProviderThreadSnapshot, TError>;
+
+  /**
+   * Restore files the agent's edit tools changed since a turn started, using the
+   * agent's own checkpoints. The conversation is left alone.
+   */
+  readonly rewindFiles?: (
+    threadId: ThreadId,
+    input: ProviderFileRewindInput,
+  ) => Effect.Effect<ProviderFileRewindResult, TError>;
 
   /**
    * Upload a thread to the provider when the adapter supports feedback.

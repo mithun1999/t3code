@@ -14,6 +14,17 @@ export function checkpointRefForThreadTurn(threadId: ThreadId, turnCount: number
   );
 }
 
+/** Files as they were when turn `turnCount` started, before the agent changed anything.
+    Unlike the previous turn's end ref, it includes edits made between turns. */
+export function checkpointStartRefForThreadTurn(
+  threadId: ThreadId,
+  turnCount: number,
+): CheckpointRef {
+  return CheckpointRef.make(
+    `${CHECKPOINT_REFS_PREFIX}/${Encoding.encodeBase64Url(threadId)}/start/${turnCount}`,
+  );
+}
+
 export function resolveThreadWorkspaceCwd(input: {
   readonly thread: {
     readonly projectId: ProjectId;

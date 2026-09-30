@@ -394,6 +394,30 @@ const CHECKPOINT_RECOVERY_MAX_CANDIDATES = 64;
 const CHECKPOINT_RECOVERY_TIMEOUT = "5 seconds";
 const GIT_CHECK_IGNORE_MAX_STDIN_BYTES = 256 * 1024;
 const CHECKPOINT_DIFF_MAX_OUTPUT_BYTES = 10_000_000;
+
+/**
+ * Splits `git diff --raw -z --no-renames <target> <latest>` into paths to bring
+ * back from the target and paths the target never had. Nested repositories
+ * (gitlinks) are skipped: their files are not in the checkpoint.
+ */
+export function parseCheckpointChanges(raw: string): {
+  readonly restore: ReadonlyArray<string>;
+  readonly remove: ReadonlyArray<string>;
+} {
+  const fields = raw.split("\0");
+  const restore: Array<string> = [];
+  const remove: Array<string> = [];
+  for (let index = 0; index + 1 < fields.length; index += 2) {
+    const meta = fields[index];
+    const filePath = fields[index + 1];
+    if (!meta?.startsWith(":") || !filePath) continue;
+    const [sourceMode, targetMode, , , status] = meta.slice(1).split(" ");
+    if (sourceMode === "160000" || targetMode === "160000") continue;
+    if (status === "A") remove.push(filePath);
+    else restore.push(filePath);
+  }
+  return { restore, remove };
+}
 const WORKSPACE_GIT_HARDENED_CONFIG_ARGS = [
   "-c",
   "core.fsmonitor=false",
@@ -1124,6 +1148,81 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
 
       return true;
     }),
+
+    restoreCheckpointChanges: Effect.fn("GitVcsDriver.checkpoints.restoreCheckpointChanges")(
+      function* (input) {
+        const operation = "GitVcsDriver.checkpoints.restoreCheckpointChanges";
+        let targetOid = yield* resolveCheckpointCommit(input.cwd, input.checkpointRef);
+        if (!targetOid && input.fallbackToHead === true) {
+          targetOid = yield* resolveHeadCommit(input.cwd);
+        }
+        const latestOid = yield* resolveCheckpointCommit(input.cwd, input.latestCheckpointRef);
+        if (!targetOid || !latestOid) {
+          return null;
+        }
+
+        const changesBetween = (fromOid: string, toOid: string) =>
+          execute({
+            operation,
+            cwd: input.cwd,
+            args: ["diff", "--raw", "-z", "--no-renames", "--no-abbrev", fromOid, toOid],
+            maxOutputBytes: CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
+            outputMode: "error",
+          }).pipe(Effect.map((diff) => parseCheckpointChanges(diff.stdout)));
+        const changes = yield* changesBetween(targetOid, latestOid);
+        let changedWithin: Set<string> | undefined;
+        for (const range of input.changedWithin ?? []) {
+          const fromOid =
+            (yield* resolveCheckpointCommit(input.cwd, range.fromCheckpointRef)) ?? targetOid;
+          const toOid = yield* resolveCheckpointCommit(input.cwd, range.toCheckpointRef);
+          if (!toOid) return null;
+          const within = yield* changesBetween(fromOid, toOid);
+          changedWithin ??= new Set();
+          for (const changedPath of [...within.restore, ...within.remove]) {
+            changedWithin.add(changedPath);
+          }
+        }
+        const touched = (changedPath: string) =>
+          input.changedWithin === undefined || changedWithin?.has(changedPath) === true;
+        const restore = changes.restore.filter(touched);
+        const remove = changes.remove.filter(touched);
+        // Working tree only: the user's staged changes stay staged.
+        if (restore.length > 0) {
+          yield* execute({
+            operation,
+            cwd: input.cwd,
+            args: [
+              "--literal-pathspecs",
+              "restore",
+              "--source",
+              targetOid,
+              "--worktree",
+              "--pathspec-from-file=-",
+              "--pathspec-file-nul",
+            ],
+            stdin: `${restore.join("\0")}\0`,
+          });
+        }
+        yield* Effect.forEach(
+          remove,
+          (relativePath) =>
+            fileSystem.remove(path.join(input.cwd, relativePath), { force: true }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new VcsProcessExitError({
+                    operation,
+                    command: "remove",
+                    cwd: input.cwd,
+                    exitCode: 0,
+                    detail: `Could not remove ${relativePath}: ${cause.message}`,
+                  }),
+              ),
+            ),
+          { discard: true },
+        );
+        return [...restore, ...remove];
+      },
+    ),
 
     diffCheckpoints: Effect.fn("GitVcsDriver.checkpoints.diffCheckpoints")(function* (input) {
       const operation = "GitVcsDriver.checkpoints.diffCheckpoints";

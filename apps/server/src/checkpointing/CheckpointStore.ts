@@ -33,6 +33,17 @@ export interface RestoreCheckpointInput {
   readonly fallbackToHead?: boolean;
 }
 
+export interface RestoreCheckpointChangesInput {
+  readonly cwd: string;
+  readonly checkpointRef: CheckpointRef;
+  readonly latestCheckpointRef: CheckpointRef;
+  readonly changedWithin?: ReadonlyArray<{
+    readonly fromCheckpointRef: CheckpointRef;
+    readonly toCheckpointRef: CheckpointRef;
+  }>;
+  readonly fallbackToHead?: boolean;
+}
+
 export interface DiffCheckpointsInput {
   readonly cwd: string;
   readonly fromCheckpointRef: CheckpointRef;
@@ -76,6 +87,16 @@ export class CheckpointStore extends Context.Service<
     readonly restoreCheckpoint: (
       input: RestoreCheckpointInput,
     ) => Effect.Effect<boolean, CheckpointStoreError>;
+
+    /**
+     * Restore only the files that changed between two checkpoints, back to the
+     * first. Staging and every other file are left alone, so a shared checkout
+     * keeps unrelated work. Returns the restored paths, or null when a checkpoint
+     * is missing. Optional so test doubles can omit it.
+     */
+    readonly restoreCheckpointChanges?: (
+      input: RestoreCheckpointChangesInput,
+    ) => Effect.Effect<ReadonlyArray<string> | null, CheckpointStoreError>;
 
     /**
      * Compute a diff between two checkpoint refs. Defaults to a full patch.
@@ -143,6 +164,16 @@ export const make = Effect.gen(function* () {
     return yield* checkpoints.restoreCheckpoint(input);
   });
 
+  const restoreCheckpointChanges: NonNullable<
+    CheckpointStore["Service"]["restoreCheckpointChanges"]
+  > = Effect.fn("restoreCheckpointChanges")(function* (input) {
+    const checkpoints = yield* resolveCheckpoints(
+      "CheckpointStore.restoreCheckpointChanges",
+      input.cwd,
+    );
+    return yield* checkpoints.restoreCheckpointChanges(input);
+  });
+
   const diffCheckpoints: CheckpointStore["Service"]["diffCheckpoints"] = Effect.fn(
     "diffCheckpoints",
   )(function* (input) {
@@ -165,6 +196,7 @@ export const make = Effect.gen(function* () {
     captureCheckpoint,
     hasCheckpointRef,
     restoreCheckpoint,
+    restoreCheckpointChanges,
     diffCheckpoints,
     deleteCheckpointRefs,
   });

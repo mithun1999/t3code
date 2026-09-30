@@ -920,15 +920,32 @@ function attachTrailingToolGroupsToAssistant(
   return result;
 }
 
-/** Match each user message to the next assistant checkpoint. */
+/** Match each user message to the next assistant checkpoint, or to the turn it
+    started when that turn was stopped before any reply. */
 function buildRevertTurnCountByUserMessageId(input: {
   supportsConversationRollback: boolean;
   timelineEntries: ReadonlyArray<TimelineEntry>;
+  runningTurnId: TurnId | null;
+  turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
   inferredCheckpointTurnCountByTurnId: Readonly<Record<string, number | undefined>>;
 }): Map<MessageId, number> {
   const byUserMessageId = new Map<MessageId, number>();
-  const entryCount = input.supportsConversationRollback ? input.timelineEntries.length : 0;
+  if (!input.supportsConversationRollback) {
+    return byUserMessageId;
+  }
+  // A message that started several turns rewinds to before the first.
+  const byStartingMessageId = new Map<MessageId, number>();
+  for (const summary of input.turnDiffSummaries) {
+    const turnCount =
+      summary.checkpointTurnCount ?? input.inferredCheckpointTurnCountByTurnId[summary.turnId];
+    if (summary.userMessageId === undefined || typeof turnCount !== "number") {
+      continue;
+    }
+    const previous = byStartingMessageId.get(summary.userMessageId) ?? turnCount;
+    byStartingMessageId.set(summary.userMessageId, Math.min(previous, turnCount));
+  }
+  const entryCount = input.timelineEntries.length;
   for (let index = 0; index < entryCount; index += 1) {
     const entry = input.timelineEntries[index];
     if (!entry || entry.kind !== "message" || entry.message.role !== "user") {
@@ -955,6 +972,29 @@ function buildRevertTurnCountByUserMessageId(input: {
       byUserMessageId.set(entry.message.id, Math.max(0, turnCount - 1));
       break;
     }
+    const startedTurnCount = byStartingMessageId.get(entry.message.id);
+    if (!byUserMessageId.has(entry.message.id) && startedTurnCount !== undefined) {
+      byUserMessageId.set(entry.message.id, Math.max(0, startedTurnCount - 1));
+    }
+  }
+  // The running turn has no checkpoint yet. Its prompt rewinds to every turn
+  // before it; the turn is stopped first.
+  const lastUserEntry = input.timelineEntries.findLast(
+    (entry) => entry.kind === "message" && entry.message.role === "user",
+  );
+  if (
+    input.runningTurnId !== null &&
+    lastUserEntry?.kind === "message" &&
+    !byUserMessageId.has(lastUserEntry.message.id)
+  ) {
+    const completedTurnCount = input.turnDiffSummaries.reduce(
+      (max, summary) =>
+        summary.turnId === input.runningTurnId
+          ? max
+          : Math.max(max, summary.checkpointTurnCount ?? 0),
+      0,
+    );
+    byUserMessageId.set(lastUserEntry.message.id, completedTurnCount);
   }
   return byUserMessageId;
 }
@@ -985,6 +1025,8 @@ export function deriveMessagesTimelineRows(input: {
   const revertTurnCountByUserMessageId = buildRevertTurnCountByUserMessageId({
     supportsConversationRollback: input.supportsConversationRollback,
     timelineEntries: input.timelineEntries,
+    runningTurnId: input.runningTurnId ?? null,
+    turnDiffSummaries: input.turnDiffSummaries,
     turnDiffSummaryByAssistantMessageId,
     inferredCheckpointTurnCountByTurnId: input.supportsConversationRollback
       ? inferCheckpointTurnCountByTurnId(input.turnDiffSummaries)

@@ -56,6 +56,8 @@ export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.resp
 export type DismissThreadUserInputInput = CommandInput<"thread.user-input.dismiss">;
 export type RevertThreadCheckpointInput = CommandInput<"thread.checkpoint.revert"> & {
   readonly restoreFiles?: boolean;
+  /** False restores files only and keeps the conversation. */
+  readonly restoreConversation?: boolean;
 };
 export type StopThreadSessionInput = CommandInput<"thread.session.stop">;
 
@@ -368,10 +370,20 @@ export const dismissThreadUserInput: (input: DismissThreadUserInputInput) => Com
 export const revertThreadCheckpoint: (input: RevertThreadCheckpointInput) => CommandEffect =
   Effect.fn("EnvironmentCommands.revertThreadCheckpoint")(function* (input) {
     const metadata = yield* timestampedCommandMetadata(input);
-    const { restoreFiles, ...command } = input;
+    const { restoreFiles, restoreConversation, ...command } = input;
+    if (restoreFiles === false && restoreConversation === false) {
+      return yield* Effect.die(
+        new Error("A rewind must restore files, the conversation, or both."),
+      );
+    }
     return yield* dispatch({
       ...command,
-      type: restoreFiles === false ? "thread.conversation.revert" : "thread.checkpoint.revert",
+      type:
+        restoreConversation === false
+          ? "thread.files.restore"
+          : restoreFiles === false
+            ? "thread.conversation.revert"
+            : "thread.checkpoint.revert",
       commandId: metadata.commandId,
       createdAt: metadata.createdAt,
     });
