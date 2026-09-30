@@ -95,11 +95,11 @@ import { scmChangeCount } from "./workbench/scmPresentation";
 import { type ScmCompare, SourceControlPanel } from "./workbench/SourceControlPanel";
 import { useScmStatuses } from "./workbench/useScmStatuses";
 import { changeTouchesFile, useWorkspaceChanges } from "./workbench/useWorkspaceChanges";
+import type { FileSurfaceCompare } from "~/rightPanelStore";
+import { SIDE_BAR_VIEW_STORAGE_KEY, SideBarViewSchema } from "~/workbenchView";
 import {
   SIDE_BAR_DEFAULT_WIDTH,
-  SIDE_BAR_VIEW_STORAGE_KEY,
   SideBarResizeHandle,
-  SideBarViewSchema,
   WorkbenchActivityBar,
   type WorkbenchSideBarView,
 } from "./workbench/WorkbenchChrome";
@@ -135,8 +135,8 @@ interface FilePreviewPanelProps {
   onOpenFileDiff?: (relativePath: string, compare: ScmCompare, root?: string) => void;
   /** A file or folder moved in the explorer; open tabs follow it. */
   onEntryMoved?: (move: { root?: string; fromPath: string; toPath: string }) => void;
-  /** Shows the file's unstaged or staged changes instead of the file. */
-  compare?: ScmCompare | null;
+  /** Shows the file's unstaged or staged changes, or a turn's, instead of the file. */
+  compare?: FileSurfaceCompare | null;
   onPendingChange: (relativePath: string, pending: boolean, root?: string) => void;
   selectedFilePending: boolean;
   workspaceMutationId: string | null;
@@ -1064,7 +1064,9 @@ export default function FilePreviewPanel({
   const surfaceRootFor = (repoRoot: string) =>
     multiRepo || repoRoot !== cwd ? repoRoot : undefined;
   const activeChange =
-    compare && relativePath ? { repoRoot: fileCwd, path: relativePath, compare } : null;
+    (compare === "working-tree" || compare === "staged") && relativePath
+      ? { repoRoot: fileCwd, path: relativePath, compare }
+      : null;
   // Reading markdown rendered is a preference, not a property of one file. Keeping
   // it on the panel meant a thread switch dropped it and forced source back.
   const [renderMarkdownPreferred, setRenderMarkdownPreferred] = useLocalStorage(
@@ -1273,65 +1275,8 @@ export default function FilePreviewPanel({
       className="flex min-h-0 flex-1 overflow-hidden bg-background outline-none"
       data-file-workbench
     >
-      {workbenchAvailable ? (
-        <WorkbenchActivityBar
-          view={sideBarView}
-          sideBarVisible={showSideBar}
-          changeCount={scmChanges}
-          shortcutLabels={viewShortcutLabels}
-          onSelect={selectSideBarView}
-        />
-      ) : null}
-      {showSideBar ? (
-        <aside
-          className={cn(
-            "relative flex min-h-0 shrink-0 flex-col bg-background",
-            previewPath ? "border-r border-border/60" : "min-w-0 flex-1",
-          )}
-          // In a narrow panel the editor keeps most of the room.
-          style={previewPath ? { width: `min(${sideBarWidth}px, 40%)` } : undefined}
-        >
-          {sideBarView === "scm" ? (
-            <SourceControlPanel
-              environmentId={environmentId}
-              scm={scm}
-              repoLabels={repoLabels}
-              activeChange={activeChange}
-              onOpenChange={(target) =>
-                onOpenFileDiff?.(target.path, target.compare, surfaceRootFor(target.repoRoot))
-              }
-              onOpenFile={(repoRoot, path) => onOpenFile(path, surfaceRootFor(repoRoot))}
-            />
-          ) : (
-            <FileBrowserPanel
-              key={`${environmentId}:${cwd}`}
-              environmentId={environmentId}
-              cwd={cwd}
-              projectName={projectName}
-              selectedPath={compare ? null : relativePath}
-              selectedRoot={fileRoot ?? undefined}
-              selectedPathRevealId={revealRequestId}
-              repoRoots={repoRoots}
-              onOpenFile={onOpenFile}
-              workspaceMutationId={workspaceMutationId}
-              scm={scm}
-              onEntryMoved={(from, to) =>
-                onEntryMoved?.({
-                  ...(surfaceRootFor(from.root) ? { root: from.root } : {}),
-                  fromPath: from.relativePath,
-                  toPath: to.relativePath,
-                })
-              }
-              {...(previewPath && !isMedia && !isPdf && !compare
-                ? { onRefreshSelectedFile: file.refresh }
-                : {})}
-            />
-          )}
-          {previewPath ? (
-            <SideBarResizeHandle width={sideBarWidth} onResize={setSideBarWidth} />
-          ) : null}
-        </aside>
-      ) : null}
+      {/* The side bar sits on the right, by the panel's outer edge, as with
+          VS Code's "Side Bar: Right". */}
       <div
         className={cn("min-w-0 flex-1 flex-col overflow-hidden", previewPath ? "flex" : "hidden")}
       >
@@ -1342,6 +1287,7 @@ export default function FilePreviewPanel({
             repoRoot={fileCwd}
             path={relativePath}
             compare={compare}
+            threadId={threadRef.threadId}
             scm={scm}
             resolvedTheme={resolvedTheme}
             wordWrap={wordWrap}
@@ -1564,6 +1510,65 @@ export default function FilePreviewPanel({
           </>
         )}
       </div>
+      {showSideBar ? (
+        <aside
+          className={cn(
+            "relative flex min-h-0 shrink-0 flex-col bg-background",
+            previewPath ? "border-l border-border/60" : "min-w-0 flex-1",
+          )}
+          // In a narrow panel the editor keeps most of the room.
+          style={previewPath ? { width: `min(${sideBarWidth}px, 40%)` } : undefined}
+        >
+          {sideBarView === "scm" ? (
+            <SourceControlPanel
+              environmentId={environmentId}
+              scm={scm}
+              repoLabels={repoLabels}
+              activeChange={activeChange}
+              onOpenChange={(target) =>
+                onOpenFileDiff?.(target.path, target.compare, surfaceRootFor(target.repoRoot))
+              }
+              onOpenFile={(repoRoot, path) => onOpenFile(path, surfaceRootFor(repoRoot))}
+            />
+          ) : (
+            <FileBrowserPanel
+              key={`${environmentId}:${cwd}`}
+              environmentId={environmentId}
+              cwd={cwd}
+              projectName={projectName}
+              selectedPath={compare ? null : relativePath}
+              selectedRoot={fileRoot ?? undefined}
+              selectedPathRevealId={revealRequestId}
+              repoRoots={repoRoots}
+              onOpenFile={onOpenFile}
+              workspaceMutationId={workspaceMutationId}
+              scm={scm}
+              onEntryMoved={(from, to) =>
+                onEntryMoved?.({
+                  ...(surfaceRootFor(from.root) ? { root: from.root } : {}),
+                  fromPath: from.relativePath,
+                  toPath: to.relativePath,
+                })
+              }
+              {...(previewPath && !isMedia && !isPdf && !compare
+                ? { onRefreshSelectedFile: file.refresh }
+                : {})}
+            />
+          )}
+          {previewPath ? (
+            <SideBarResizeHandle width={sideBarWidth} onResize={setSideBarWidth} />
+          ) : null}
+        </aside>
+      ) : null}
+      {workbenchAvailable ? (
+        <WorkbenchActivityBar
+          view={sideBarView}
+          sideBarVisible={showSideBar}
+          changeCount={scmChanges}
+          shortcutLabels={viewShortcutLabels}
+          onSelect={selectSideBarView}
+        />
+      ) : null}
     </div>
   );
 }

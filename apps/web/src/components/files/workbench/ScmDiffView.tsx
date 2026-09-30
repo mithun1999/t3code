@@ -1,5 +1,5 @@
 import type * as Monaco from "monaco-editor/editor/editor.api.js";
-import type { EnvironmentId, ScmChange } from "@t3tools/contracts";
+import type { EnvironmentId, ScmChange, ThreadId } from "@t3tools/contracts";
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -19,6 +19,7 @@ import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { cn } from "~/lib/utils";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
+import type { FileSurfaceCompare } from "~/rightPanelStore";
 import { workspaceIde } from "~/state/workspaceIde";
 
 import { FILE_SURFACE_SUBHEADER_CLASS, FileSurfaceAction } from "../fileSurfaceChrome";
@@ -38,7 +39,9 @@ interface ScmDiffViewProps {
   /** Repository root the path is relative to. */
   readonly repoRoot: string;
   readonly path: string;
-  readonly compare: ScmCompare;
+  /** Unstaged or staged changes, or what a turn of `threadId` changed. */
+  readonly compare: FileSurfaceCompare;
+  readonly threadId: ThreadId;
   readonly scm: ScmStatuses;
   readonly resolvedTheme: "light" | "dark";
   readonly wordWrap: boolean;
@@ -63,31 +66,52 @@ function findChange(
   return null;
 }
 
+/** The turn a "turn:<n>" comparison is about, or null for git changes. */
+function turnCountOf(compare: FileSurfaceCompare): number | null {
+  return compare.startsWith("turn:") ? Number(compare.slice("turn:".length)) : null;
+}
+
 /**
  * A changed file as VS Code's source control shows it: the index (or HEAD for
- * staged changes) on the left, the working tree (or index) on the right.
+ * staged changes) on the left, the working tree (or index) on the right. A
+ * turn's changes compare the file as the turn found it with how it left it.
  */
 export function ScmDiffView(props: ScmDiffViewProps) {
-  const { environmentId, repoRoot, path, compare } = props;
-  const change = findChange(props.scm, repoRoot, path, compare);
+  const { environmentId, repoRoot, path, compare, threadId } = props;
+  const turnCount = turnCountOf(compare);
+  const scmCompare: ScmCompare | null = turnCount === null ? (compare as ScmCompare) : null;
+  const change = scmCompare ? findChange(props.scm, repoRoot, path, scmCompare) : null;
   const originalPath = compare === "staged" ? (change?.originalPath ?? path) : path;
+  const turnInput = (revision: "turn-before" | "turn-after") => ({
+    cwd: repoRoot,
+    relativePath: path,
+    revision,
+    threadId,
+    turnCount: turnCount ?? 0,
+  });
   const original = useEnvironmentQuery(
     workspaceIde.scmReadFile({
       environmentId,
-      input: {
-        cwd: repoRoot,
-        relativePath: originalPath,
-        revision: compare === "staged" ? "HEAD" : "index",
-      },
+      input:
+        turnCount !== null
+          ? turnInput("turn-before")
+          : {
+              cwd: repoRoot,
+              relativePath: originalPath,
+              revision: compare === "staged" ? "HEAD" : "index",
+            },
     }),
   );
+  // The right side read from git: the index for staged changes, or the turn's end.
   const stagedModified = useEnvironmentQuery(
     compare === "staged"
       ? workspaceIde.scmReadFile({
           environmentId,
           input: { cwd: repoRoot, relativePath: path, revision: "index" },
         })
-      : null,
+      : turnCount !== null
+        ? workspaceIde.scmReadFile({ environmentId, input: turnInput("turn-after") })
+        : null,
   );
   const deletedOnDisk = compare === "working-tree" && change?.status === "deleted";
   const workingFile = useProjectFileQuery(
@@ -112,7 +136,8 @@ export function ScmDiffView(props: ScmDiffViewProps) {
   const discard = useAtomCommand(workspaceIde.discard, { reportFailure: false });
 
   // Staging or committing moves the index and HEAD; an agent moves the file.
-  useWorkspaceChanges(environmentId, [repoRoot], (_root, event) => {
+  // A turn's checkpoints never change.
+  useWorkspaceChanges(environmentId, turnCount === null ? [repoRoot] : [], (_root, event) => {
     if (event.gitChanged || event.overflow) {
       original.refresh();
       stagedModified.refresh();
@@ -122,7 +147,7 @@ export function ScmDiffView(props: ScmDiffViewProps) {
 
   const originalContents = original.data?.exists ? original.data.contents : "";
   const modifiedContents =
-    compare === "staged"
+    compare !== "working-tree"
       ? stagedModified.data?.exists
         ? stagedModified.data.contents
         : ""
@@ -139,7 +164,7 @@ export function ScmDiffView(props: ScmDiffViewProps) {
     workingFile.data?.truncated === true;
   const loading =
     original.data === null ||
-    (compare === "staged" ? stagedModified.data === null : modifiedContents === null);
+    (compare !== "working-tree" ? stagedModified.data === null : modifiedContents === null);
   const editable = compare === "working-tree" && !deletedOnDisk && !tooLarge;
   const { name, directory } = splitChangePath(path);
 
@@ -173,7 +198,13 @@ export function ScmDiffView(props: ScmDiffViewProps) {
           />
           <span className="min-w-0 truncate font-medium">{name}</span>
           <span className="hidden shrink-0 text-muted-foreground @md/diff-header:inline">
-            ({compare === "staged" ? "Index" : "Working Tree"})
+            (
+            {turnCount !== null
+              ? `Turn ${turnCount}`
+              : compare === "staged"
+                ? "Index"
+                : "Working Tree"}
+            )
           </span>
           {change ? (
             <span className={`shrink-0 text-2xs font-medium ${SCM_STATUS_CLASS[change.status]}`}>
@@ -213,7 +244,7 @@ export function ScmDiffView(props: ScmDiffViewProps) {
             <FileIcon className="size-3.5" />
           </FileSurfaceAction>
         )}
-        {compare === "staged" ? (
+        {turnCount !== null ? null : compare === "staged" ? (
           <FileSurfaceAction
             label="Unstage Changes"
             onPress={() =>
@@ -260,7 +291,9 @@ export function ScmDiffView(props: ScmDiffViewProps) {
           environmentId={environmentId}
           cwd={repoRoot}
           relativePath={path}
-          originalRevision={compare === "staged" ? "HEAD" : "index"}
+          originalRevision={
+            turnCount !== null ? `turn-${turnCount}` : compare === "staged" ? "HEAD" : "index"
+          }
           originalContents={originalContents}
           modifiedContents={modifiedContents}
           disk={editable ? workingFile.diskData : null}

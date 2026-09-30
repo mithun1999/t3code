@@ -181,7 +181,7 @@ import {
 import { useTheme } from "../hooks/useTheme";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { findUncommittedChange } from "./files/workbench/uncommittedChanges";
-import { revealSourceControlView } from "./files/workbench/WorkbenchChrome";
+import { revealSourceControlView } from "../workbenchView";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { subscribeSnapShotComposerFocus } from "../lib/desktopSnapShot";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
@@ -4699,12 +4699,11 @@ export default function ChatView(props: ChatViewProps) {
     },
     [activeThreadRef, openPreview],
   );
+  // "Diff" is Source Control now: the store opens the Files panel's view.
   const addDiffSurface = useCallback(() => {
     if (!activeThreadRef || !canReviewDiff) return;
-    useDiffPanelStore.getState().selectGitScope(activeThreadRef, "unstaged");
     useRightPanelStore.getState().open(activeThreadRef, "diff");
-    onDiffPanelOpen?.();
-  }, [activeThreadRef, canReviewDiff, onDiffPanelOpen]);
+  }, [activeThreadRef, canReviewDiff]);
   const addFilesSurface = useCallback(() => {
     if (!activeThreadRef || !activeProject) return;
     useRightPanelStore.getState().open(activeThreadRef, "files");
@@ -4992,11 +4991,8 @@ export default function ChatView(props: ChatViewProps) {
         diffAction === "defer" || shouldDeferLink ? previousRunningTurnId : activeRunningTurnId,
     };
     if (diffAction !== "open" || newlyCompletedTurnId === null) return;
-    if (!panels.openProactive(activeThreadRef, { id: "diff", kind: "diff" }, userActionRevision)) {
-      return;
-    }
-    useDiffPanelStore.getState().selectGitScope(activeThreadRef, "unstaged");
-    onDiffPanelOpen?.();
+    // Opens Source Control on the turn's changes (the store maps "diff" there).
+    panels.openProactive(activeThreadRef, { id: "diff", kind: "diff" }, userActionRevision);
   }, [
     activeThread?.checkpoints,
     activeLatestTurn?.turnId,
@@ -5011,7 +5007,6 @@ export default function ChatView(props: ChatViewProps) {
     linkedThreadPullRequest,
     proactivePullRequestsKey,
     hasLinkedPullRequestDetail,
-    onDiffPanelOpen,
     pullRequestsCapabilityKnown,
     pullRequestsSurfaceAvailable,
     visiblePullRequestCount,
@@ -9706,36 +9701,47 @@ export default function ChatView(props: ChatViewProps) {
   }, []);
   const onOpenTurnDiff = useCallback(
     (turnId: TurnId, filePath?: string, repoRoot?: string) => {
-      if (!isServerThread || !activeThreadRef) return;
-      const openTurnDiffPanel = () => {
-        explicitDiffOpenRef.current = diffOpen ? null : activeThreadRef;
-        useDiffPanelStore.getState().selectTurn(activeThreadRef, turnId, filePath, repoRoot);
-        useRightPanelStore.getState().open(activeThreadRef, "diff");
-        onDiffPanelOpen?.();
+      if (!isServerThread || !activeThreadRef || !activeWorkspaceRoot) return;
+      const threadRef = activeThreadRef;
+      const workspaceRoot = activeWorkspaceRoot;
+      const checkpoints = activeThread?.checkpoints ?? [];
+      const checkpoint = checkpoints.find((candidate) => candidate.turnId === turnId);
+      if (!checkpoint) return;
+      const surfaceRoot = (root: string | undefined) =>
+        root && (isMultiRepo || root !== workspaceRoot) ? root : undefined;
+      const files = filePath
+        ? [{ path: filePath, root: repoRoot }]
+        : checkpoint.files.map((file) => ({ path: file.path, root: file.repoRoot }));
+      // What this turn changed, in VS Code's diff editor.
+      const openTurnChanges = () => {
+        const first = files[0];
+        if (!first) return;
+        useRightPanelStore
+          .getState()
+          .openFileDiff(
+            threadRef,
+            first.path,
+            `turn:${checkpoint.checkpointTurnCount}`,
+            surfaceRoot(first.root),
+          );
       };
       // The latest turn's changes that are still uncommitted open where you'd
-      // review and commit them: Source Control's diff editor. Earlier turns
-      // keep the turn diff, which shows exactly what that turn changed.
-      const checkpoints = activeThread?.checkpoints ?? [];
+      // review and commit them: Source Control. Earlier turns show exactly
+      // what that turn changed.
       const latest = checkpoints.reduce<(typeof checkpoints)[number] | undefined>(
-        (newest, checkpoint) =>
-          !newest || checkpoint.checkpointTurnCount > newest.checkpointTurnCount
-            ? checkpoint
+        (newest, candidate) =>
+          !newest || candidate.checkpointTurnCount > newest.checkpointTurnCount
+            ? candidate
             : newest,
         undefined,
       );
-      if (!activeWorkspaceRoot || latest?.turnId !== turnId) {
-        openTurnDiffPanel();
+      if (latest?.turnId !== turnId) {
+        openTurnChanges();
         return;
       }
-      const files = filePath
-        ? [{ path: filePath, root: repoRoot }]
-        : latest.files.map((file) => ({ path: file.path, root: file.repoRoot }));
-      const threadRef = activeThreadRef;
-      const workspaceRoot = activeWorkspaceRoot;
       void findUncommittedChange(threadRef.environmentId, workspaceRoot, files).then((change) => {
         if (!change) {
-          openTurnDiffPanel();
+          openTurnChanges();
           return;
         }
         revealSourceControlView();
@@ -9749,15 +9755,7 @@ export default function ChatView(props: ChatViewProps) {
           );
       });
     },
-    [
-      activeThread?.checkpoints,
-      activeThreadRef,
-      activeWorkspaceRoot,
-      diffOpen,
-      isMultiRepo,
-      isServerThread,
-      onDiffPanelOpen,
-    ],
+    [activeThread?.checkpoints, activeThreadRef, activeWorkspaceRoot, isMultiRepo, isServerThread],
   );
   // The revert handler is read from a ref at call-time so the callback
   // reference is fully stable and never busts TimelineRowCtx identity.

@@ -18,6 +18,7 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 import { resolveStorage } from "./lib/storage";
+import { readWorkbenchSideBarView, revealSourceControlView } from "./workbenchView";
 
 const RIGHT_PANEL_KINDS = [
   "diff",
@@ -31,7 +32,8 @@ const RIGHT_PANEL_KINDS = [
   "agents",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
-export type FileSurfaceCompare = "working-tree" | "staged";
+/** A file's unstaged or staged git changes, or what a thread's turn changed in it. */
+export type FileSurfaceCompare = "working-tree" | "staged" | `turn:${number}`;
 
 export interface DeviceTabTarget {
   hostId: string;
@@ -104,7 +106,8 @@ const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 // v10 keys pull-request surfaces by reference instead of a singleton tab.
 // v11 stops persisting the pull-request list's shared panel, so a restart opens the page fresh.
 // v12 adds the device surface.
-const RIGHT_PANEL_STORAGE_VERSION = 13;
+// v14 drops the diff surface: Source Control in the Files panel replaced it.
+const RIGHT_PANEL_STORAGE_VERSION = 14;
 
 /** A fixed workspace-level ref: each PR surface carries its own real environment. */
 export const PULL_REQUESTS_PANEL_REF = scopeThreadRef(
@@ -362,6 +365,23 @@ const upsertSurface = (
   activeSurfaceId: activate ? surface.id : current.activeSurfaceId,
 });
 
+const isWorkbenchSurface = (surface: RightPanelSurface | undefined): boolean =>
+  surface?.kind === "files" || (surface?.kind === "file" && surface.attachment === undefined);
+
+/**
+ * Source Control lives in the Files panel: show the panel's tab that is open
+ * (the active one first), or open one. The caller switches its side bar.
+ */
+const withSourceControl = (current: ThreadRightPanelState): ThreadRightPanelState => {
+  const active = current.surfaces.find((surface) => surface.id === current.activeSurfaceId);
+  const target = isWorkbenchSurface(active)
+    ? active
+    : current.surfaces.findLast((surface) => isWorkbenchSurface(surface));
+  return target
+    ? { ...current, isOpen: true, activeSurfaceId: target.id }
+    : upsertSurface(current, singletonSurface("files"));
+};
+
 const updateThread = (
   byThreadKey: Record<string, ThreadRightPanelState>,
   threadKey: string,
@@ -450,6 +470,8 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                     // Dropped surface kind: plans now render inline in the
                     // transcript (v9).
                     if ((surface as { kind?: string }).kind === "plan") return [];
+                    // Dropped: Source Control in the Files panel replaced the diff (v14).
+                    if (surface.kind === "diff") return [];
                     if (surface.kind === "file") {
                       const revealLine =
                         typeof surface.revealLine === "number" &&
@@ -585,6 +607,10 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             return state;
           }
           opened = true;
+          if (surface.kind === "diff") {
+            revealSourceControlView();
+            return automaticUpdate(state, threadKey, withSourceControl);
+          }
           return automaticUpdate(state, threadKey, (current) => upsertSurface(current, surface));
         });
         return opened;
@@ -592,6 +618,10 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
       open: (ref, kind) =>
         set((state) =>
           userAction(state, scopedThreadKey(ref), (current) => {
+            if (kind === "diff") {
+              revealSourceControlView();
+              return withSourceControl(current);
+            }
             if (kind === "preview") {
               const existing = current.surfaces.find((surface) => surface.kind === "preview");
               return upsertSurface(current, existing ?? browserSurface(null));
@@ -993,6 +1023,18 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             const active = current.surfaces.find(
               (surface) => surface.id === current.activeSurfaceId,
             );
+            if (kind === "diff") {
+              // ⌘D shows Source Control, or hides the panel when it is showing.
+              if (
+                current.isOpen &&
+                isWorkbenchSurface(active) &&
+                readWorkbenchSideBarView() === "scm"
+              ) {
+                return { ...current, isOpen: false };
+              }
+              revealSourceControlView();
+              return withSourceControl(current);
+            }
             if (current.isOpen && active?.kind === kind) {
               return { ...current, isOpen: false };
             }
