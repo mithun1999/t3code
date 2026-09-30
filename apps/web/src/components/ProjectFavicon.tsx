@@ -82,8 +82,7 @@ export function ProjectFavicon(input: {
   }
   // A `.code-workspace`-backed project reads as a workspace wherever it shows,
   // matching the command palette's workspace-file marker.
-  const FallbackIcon =
-    input.fallbackIcon ?? (project.workspaceFile ? LayersIcon : FolderCodeIcon);
+  const FallbackIcon = input.fallbackIcon ?? (project.workspaceFile ? LayersIcon : FolderCodeIcon);
 
   if (!src || isProjectFaviconFallbackUrl(src)) {
     return (

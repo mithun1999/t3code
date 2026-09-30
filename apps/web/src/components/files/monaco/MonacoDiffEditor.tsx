@@ -10,7 +10,7 @@ import { fileContentRevision } from "../fileContentRevision";
 import { setProjectFileQueryData } from "../projectFilesQueryState";
 import { type FileSaveHooks, useFileSaveCoordinator } from "../useFileSaveCoordinator";
 import { DiskConflictBanner } from "./DiskConflictBanner";
-import { fontOptions, useMonacoRuntime } from "./monacoEditorShared";
+import { fontOptions, useMonacoRuntime, useWorkbenchEditorKeys } from "./monacoEditorShared";
 import {
   acquireFileModel,
   applyExternalContents,
@@ -276,6 +276,12 @@ function MonacoDiffEditorSurface({
     saveLocal,
     refreshDisk: onRefreshDisk,
   });
+
+  const keyedEditors = useMemo(
+    () => (editor ? [editor.getOriginalEditor(), editor.getModifiedEditor()] : []),
+    [editor],
+  );
+  useWorkbenchEditorKeys(monaco, keyedEditors);
 
   useEffect(() => {
     if (!editor) return;

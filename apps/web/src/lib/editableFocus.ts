@@ -6,6 +6,8 @@ const EDITABLE_SELECTOR = [
   '[contenteditable="true"]',
   '[contenteditable="plaintext-only"]',
   '[role="textbox"]',
+  // Monaco's input can be an EditContext element rather than a textarea.
+  ".monaco-editor",
 ].join(",");
 
 /**
@@ -14,4 +16,12 @@ const EDITABLE_SELECTOR = [
  */
 export function isEditableFocused(target: EventTarget | null = document.activeElement): boolean {
   return target instanceof Element && target.closest(EDITABLE_SELECTOR) !== null;
+}
+
+/**
+ * Whether a code editor (a file or diff in the Files panel) owns the keyboard.
+ * VS Code's editor shortcuts (⌘D, ⌘[, ⌘K chords, ⇧⌘K…) win over the app's then.
+ */
+export function isCodeEditorFocused(target: EventTarget | null = document.activeElement): boolean {
+  return target instanceof Element && target.closest(".monaco-editor") !== null;
 }

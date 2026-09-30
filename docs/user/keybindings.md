@@ -84,9 +84,11 @@ Join modifiers and a key with `+`, such as `mod+shift+d` or `ctrl+l`.
 ## When conditions
 
 Available context keys are `terminalFocus`, `terminalOpen`, `previewFocus`,
-`previewOpen`, `modelPickerOpen`, `usagePageOpen`, `editableFocus`, `isWeb`, and `isDesktop`.
+`previewOpen`, `modelPickerOpen`, `usagePageOpen`, `editableFocus`, `codeEditorFocus`,
+`isWeb`, and `isDesktop`.
 `editableFocus` is true while a text field, the composer, or another editor has
-the keyboard. `isWeb` is true in a browser tab. `isDesktop` is true in the
+the keyboard. `codeEditorFocus` is true while a file or diff in the Files panel
+has the keyboard. `isWeb` is true in a browser tab. `isDesktop` is true in the
 desktop app. Unknown keys evaluate to `false`.
 
 `mod+1` through `mod+9` jump to the first nine threads, and to models while the
@@ -133,6 +135,14 @@ shortcut such as `alt+w`.
 
 Many defaults include `!terminalFocus` so they do not intercept terminal input.
 Keep that condition when remapping them if you want the same behavior.
+
+Defaults that share a chord with VS Code's editor also include `!codeEditorFocus`,
+so the editor gets them while a file or diff has the keyboard: `mod+d` (add the
+next match), `mod+[` and `mod+]` (outdent and indent), `mod+k` chords, `mod+s`
+(save), `mod+u`, `mod+shift+enter`, `mod+shift+k` (delete line), `mod+shift+l`
+(select all matches) and `mod+shift+p` (command palette). A configuration file
+that still holds the earlier defaults is updated on the next start; rules you
+changed are left alone.
 
 ## Desktop quit shortcut
 
