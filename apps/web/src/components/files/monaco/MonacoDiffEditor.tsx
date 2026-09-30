@@ -52,6 +52,7 @@ const DIFF_EDITOR_OPTIONS: Monaco.editor.IStandaloneDiffEditorConstructionOption
   experimental: { showMoves: true },
   fixedOverflowWidgets: true,
   ignoreTrimWhitespace: false,
+  lineNumbersMinChars: 3,
   minimap: { enabled: false },
   originalEditable: false,
   padding: { top: 4 },

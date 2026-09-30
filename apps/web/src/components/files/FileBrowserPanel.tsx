@@ -68,7 +68,11 @@ interface FileBrowserPanelProps {
   // Multi-repo workspaces (#923): when set, list the union of these repo roots
   // and group the tree by repo. Omitted/single-entry keeps single-root behavior.
   repoRoots?: readonly string[] | undefined;
-  onOpenFile: (relativePath: string, root?: string) => void;
+  onOpenFile: (
+    relativePath: string,
+    root?: string,
+    options?: { readonly preview?: boolean },
+  ) => void;
   onRefreshSelectedFile?: () => void;
   workspaceMutationId: string | null;
   /** Git status per repo, for VS Code-style colours and badges on changed files. */
@@ -669,7 +673,9 @@ export default function FileBrowserPanel({
   };
   const showEntryContextMenuRef = useRef(showEntryContextMenu);
   const deleteTreeEntriesRef = useRef(deleteTreeEntries);
+  const onOpenFileRef = useRef(onOpenFile);
   useEffect(() => {
+    onOpenFileRef.current = onOpenFile;
     showEntryContextMenuRef.current = showEntryContextMenu;
     handleRenameRef.current = handleRename;
     handleDropRef.current = handleDrop;
@@ -983,6 +989,27 @@ export default function FileBrowserPanel({
       panel.removeEventListener("dragend", handleDragEnd);
     };
   }, [dragMention]);
+
+  // A single click opens a preview tab; a double click keeps it open (VS Code).
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (panel === null) return;
+    const handleDoubleClick = (event: MouseEvent) => {
+      const row = event
+        .composedPath()
+        .find(
+          (node): node is Element => node instanceof Element && node.hasAttribute("data-item-path"),
+        );
+      const path = row?.getAttribute("data-item-path");
+      if (!path || path.endsWith("/")) return;
+      const info = entryInfoRef.current.get(path);
+      if (info && entryKindsRef.current.get(path) === "file") {
+        onOpenFileRef.current(info.relativePath, info.root, { preview: false });
+      }
+    };
+    panel.addEventListener("dblclick", handleDoubleClick);
+    return () => panel.removeEventListener("dblclick", handleDoubleClick);
+  }, []);
 
   // VS Code's keys on the focused row: F2 renames, ⌘⌫ or Delete deletes.
   useEffect(() => {

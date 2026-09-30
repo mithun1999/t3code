@@ -96,7 +96,9 @@ import { useScmStatuses } from "./workbench/useScmStatuses";
 import { changeTouchesFile, useWorkspaceChanges } from "./workbench/useWorkspaceChanges";
 import {
   SIDE_BAR_DEFAULT_WIDTH,
+  SIDE_BAR_VIEW_STORAGE_KEY,
   SideBarResizeHandle,
+  SideBarViewSchema,
   WorkbenchActivityBar,
   type WorkbenchSideBarView,
 } from "./workbench/WorkbenchChrome";
@@ -123,7 +125,11 @@ interface FilePreviewPanelProps {
   // Owning root of the currently-open file. Reads/writes resolve against this
   // root (it may be a different repo than the anchor `cwd`). Null = anchor.
   fileRoot?: string | null | undefined;
-  onOpenFile: (relativePath: string, root?: string) => void;
+  onOpenFile: (
+    relativePath: string,
+    root?: string,
+    options?: { readonly preview?: boolean },
+  ) => void;
   /** Opens a file's git changes in the diff editor (VS Code's source control). */
   onOpenFileDiff?: (relativePath: string, compare: ScmCompare, root?: string) => void;
   /** A file or folder moved in the explorer; open tabs follow it. */
@@ -136,9 +142,7 @@ interface FilePreviewPanelProps {
 }
 
 const FILE_EXPLORER_STORAGE_KEY = "t3code.fileExplorerOpen";
-const SIDE_BAR_VIEW_STORAGE_KEY = "t3code.workbenchSideBarView";
 const SIDE_BAR_WIDTH_STORAGE_KEY = "t3code.workbenchSideBarWidth";
-const SideBarViewSchema = Schema.Literals(["explorer", "scm"]);
 const RENDER_MARKDOWN_STORAGE_KEY = "t3code.renderMarkdown";
 const RENDER_BROWSER_FILE_STORAGE_KEY = "t3code.renderBrowserFile";
 const RENDER_TABLE_STORAGE_KEY = "t3code.renderTable";

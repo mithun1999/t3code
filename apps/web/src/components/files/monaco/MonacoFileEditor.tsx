@@ -52,6 +52,9 @@ const EDITOR_OPTIONS: Monaco.editor.IStandaloneEditorConstructionOptions = {
   // Holds the review comment "+", as VS Code's does breakpoints.
   glyphMargin: true,
   guides: { bracketPairs: "active", indentation: true },
+  // A tighter gutter than Monaco's default leaves the side panel's width to the code.
+  lineDecorationsWidth: 6,
+  lineNumbersMinChars: 3,
   minimap: { enabled: true },
   padding: { top: 4 },
   scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },

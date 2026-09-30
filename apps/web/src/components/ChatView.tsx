@@ -180,6 +180,8 @@ import {
 } from "../types";
 import { useTheme } from "../hooks/useTheme";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
+import { findUncommittedChange } from "./files/workbench/uncommittedChanges";
+import { revealSourceControlView } from "./files/workbench/WorkbenchChrome";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { subscribeSnapShotComposerFocus } from "../lib/desktopSnapShot";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
@@ -187,6 +189,7 @@ import { useMediaQuery } from "../hooks/useMediaQuery";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import {
   pullRequestSurface,
+  fileDiffSurfaceId,
   fileSurfaceId,
   type FileSurfaceCompare,
   selectActiveRightPanel,
@@ -2324,6 +2327,15 @@ export default function ChatView(props: ChatViewProps) {
     : EMPTY_PENDING_FILE_SURFACE_IDS;
   const handleFilePendingChange = useCallback(
     (relativePath: string, pending: boolean, root?: string) => {
+      // Editing a file keeps its preview tab, or its diff's, open (VS Code).
+      if (pending && activeThreadRef) {
+        const store = useRightPanelStore.getState();
+        store.pinFileSurface(activeThreadRef, fileSurfaceId(relativePath, root));
+        store.pinFileSurface(
+          activeThreadRef,
+          fileDiffSurfaceId(relativePath, "working-tree", root),
+        );
+      }
       if (!activeProjectKey) return;
       setPendingFileSurfaceIdsByProject((currentByProject) => {
         const current = currentByProject.get(activeProjectKey) ?? EMPTY_PENDING_FILE_SURFACE_IDS;
@@ -2338,7 +2350,7 @@ export default function ChatView(props: ChatViewProps) {
         return nextByProject;
       });
     },
-    [activeProjectKey],
+    [activeProjectKey, activeThreadRef],
   );
   const configuredPreviewUrls = useMemo(
     () => getConfiguredPreviewUrls(activeProjectScripts),
@@ -4769,11 +4781,20 @@ export default function ChatView(props: ChatViewProps) {
     if (!sessionStillExists) usePreviewMiniPlayerStore.getState().close(activeThreadRef);
   }, [activePreviewMiniPlayer, activeThreadRef, deviceState.sessions, deviceStateLoaded]);
   const openFileSurface = useCallback(
-    (relativePath: string, root?: string) => {
+    (relativePath: string, root?: string, options?: { readonly preview?: boolean }) => {
       if (!activeThreadRef || !activeProject) return;
-      useRightPanelStore.getState().openFile(activeThreadRef, relativePath, undefined, root);
+      useRightPanelStore
+        .getState()
+        .openFile(activeThreadRef, relativePath, undefined, root, options);
     },
     [activeProject, activeThreadRef],
+  );
+  const pinRightPanelSurface = useCallback(
+    (surface: RightPanelSurface) => {
+      if (!activeThreadRef) return;
+      useRightPanelStore.getState().pinFileSurface(activeThreadRef, surface.id);
+    },
+    [activeThreadRef],
   );
   const openFileDiffSurface = useCallback(
     (relativePath: string, compare: FileSurfaceCompare, root?: string) => {
@@ -9657,12 +9678,57 @@ export default function ChatView(props: ChatViewProps) {
   const onOpenTurnDiff = useCallback(
     (turnId: TurnId, filePath?: string, repoRoot?: string) => {
       if (!isServerThread || !activeThreadRef) return;
-      explicitDiffOpenRef.current = diffOpen ? null : activeThreadRef;
-      useDiffPanelStore.getState().selectTurn(activeThreadRef, turnId, filePath, repoRoot);
-      useRightPanelStore.getState().open(activeThreadRef, "diff");
-      onDiffPanelOpen?.();
+      const openTurnDiffPanel = () => {
+        explicitDiffOpenRef.current = diffOpen ? null : activeThreadRef;
+        useDiffPanelStore.getState().selectTurn(activeThreadRef, turnId, filePath, repoRoot);
+        useRightPanelStore.getState().open(activeThreadRef, "diff");
+        onDiffPanelOpen?.();
+      };
+      // The latest turn's changes that are still uncommitted open where you'd
+      // review and commit them: Source Control's diff editor. Earlier turns
+      // keep the turn diff, which shows exactly what that turn changed.
+      const checkpoints = activeThread?.checkpoints ?? [];
+      const latest = checkpoints.reduce<(typeof checkpoints)[number] | undefined>(
+        (newest, checkpoint) =>
+          !newest || checkpoint.checkpointTurnCount > newest.checkpointTurnCount
+            ? checkpoint
+            : newest,
+        undefined,
+      );
+      if (!activeWorkspaceRoot || latest?.turnId !== turnId) {
+        openTurnDiffPanel();
+        return;
+      }
+      const files = filePath
+        ? [{ path: filePath, root: repoRoot }]
+        : latest.files.map((file) => ({ path: file.path, root: file.repoRoot }));
+      const threadRef = activeThreadRef;
+      const workspaceRoot = activeWorkspaceRoot;
+      void findUncommittedChange(threadRef.environmentId, workspaceRoot, files).then((change) => {
+        if (!change) {
+          openTurnDiffPanel();
+          return;
+        }
+        revealSourceControlView();
+        useRightPanelStore
+          .getState()
+          .openFileDiff(
+            threadRef,
+            change.path,
+            change.compare,
+            isMultiRepo || change.repoRoot !== workspaceRoot ? change.repoRoot : undefined,
+          );
+      });
     },
-    [activeThreadRef, diffOpen, isServerThread, onDiffPanelOpen],
+    [
+      activeThread?.checkpoints,
+      activeThreadRef,
+      activeWorkspaceRoot,
+      diffOpen,
+      isMultiRepo,
+      isServerThread,
+      onDiffPanelOpen,
+    ],
   );
   // The revert handler is read from a ref at call-time so the callback
   // reference is fully stable and never busts TimelineRowCtx identity.
@@ -10530,6 +10596,7 @@ export default function ChatView(props: ChatViewProps) {
           terminalLabelsById={activeTerminalLabelsById}
           onActivate={activateRightPanelSurface}
           onCloseSurface={closeRightPanelSurface}
+          onPinSurface={pinRightPanelSurface}
           onRenameDevice={(surfaceId, title) => {
             if (activeThreadRef)
               useRightPanelStore.getState().renameDevice(activeThreadRef, surfaceId, title);
@@ -10588,6 +10655,7 @@ export default function ChatView(props: ChatViewProps) {
             terminalLabelsById={activeTerminalLabelsById}
             onActivate={activateRightPanelSurface}
             onCloseSurface={closeRightPanelSurface}
+            onPinSurface={pinRightPanelSurface}
             onRenameDevice={(surfaceId, title) => {
               if (activeThreadRef)
                 useRightPanelStore.getState().renameDevice(activeThreadRef, surfaceId, title);

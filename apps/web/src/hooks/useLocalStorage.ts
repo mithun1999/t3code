@@ -97,6 +97,12 @@ function dispatchLocalStorageChange(key: string) {
   }
 }
 
+/** Writes a value and tells every `useLocalStorage` reading `key` in this window. */
+export function writeLocalStorageValue<T, E>(key: string, value: T, schema: Schema.Codec<T, E>) {
+  setLocalStorageItem(key, value, schema);
+  dispatchLocalStorageChange(key);
+}
+
 export function useLocalStorage<T, E>(
   key: string,
   initialValue: T,

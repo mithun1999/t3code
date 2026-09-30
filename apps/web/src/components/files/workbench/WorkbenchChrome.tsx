@@ -1,13 +1,18 @@
+import * as Schema from "effect/Schema";
 import { FilesIcon, GitBranchIcon } from "lucide-react";
 import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
+import { writeLocalStorageValue } from "~/hooks/useLocalStorage";
 import { cn } from "~/lib/utils";
 
 export type WorkbenchSideBarView = "explorer" | "scm";
 
+export const SIDE_BAR_VIEW_STORAGE_KEY = "t3code.workbenchSideBarView";
+export const SideBarViewSchema = Schema.Literals(["explorer", "scm"]);
+
 export const SIDE_BAR_MIN_WIDTH = 180;
-export const SIDE_BAR_DEFAULT_WIDTH = 300;
+export const SIDE_BAR_DEFAULT_WIDTH = 240;
 
 function ActivityBarButton(props: {
   label: string;
@@ -131,4 +136,13 @@ export function SideBarResizeHandle(props: { width: number; onResize: (width: nu
       onDoubleClick={() => props.onResize(SIDE_BAR_DEFAULT_WIDTH)}
     />
   );
+}
+
+/** Switches the Files panel's side bar to Source Control, mounted or not. */
+export function revealSourceControlView(): void {
+  try {
+    writeLocalStorageValue(SIDE_BAR_VIEW_STORAGE_KEY, "scm", SideBarViewSchema);
+  } catch (error) {
+    console.error(error);
+  }
 }
