@@ -7350,6 +7350,54 @@ describe("ClaudeAdapterLive", () => {
         Effect.provide(harness.layer),
       );
     });
+
+    it.effect("rewinds after compaction, keeping the turns it summarized", () => {
+      const turnIds: Array<string> = [];
+      const compacted = (sessionId?: string) => [
+        claudeHistoryMessage({
+          type: "system",
+          uuid: sessionId ? "fork-compact-boundary" : "compact-boundary",
+          content: { subtype: "compact_boundary" },
+          ...(sessionId ? { sessionId } : {}),
+        }),
+        claudeHistoryMessage({
+          type: "user",
+          uuid: sessionId ? "fork-compact-summary" : "compact-summary",
+          content: "This session is being continued from a previous conversation.",
+          ...(sessionId ? { sessionId } : {}),
+        }),
+      ];
+      const harness = makeHarness({
+        forkSession: async () => ({ sessionId: CLAUDE_FORK_SESSION_ID }),
+        getSessionMessages: async (sessionId) =>
+          sessionId === CLAUDE_FORK_SESSION_ID
+            ? [...compacted(sessionId), ...history(turnIds.slice(1, 2), sessionId)]
+            : [...compacted(), ...history(turnIds.slice(1))],
+      });
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+        });
+        for (const input of ["first", "second", "third"]) {
+          turnIds.push(
+            (yield* sendCompletedClaudeTurn(adapter, harness, session.threadId, input)).turnId,
+          );
+        }
+        yield* adapter.rollbackThread(session.threadId, 1);
+        assert.deepEqual(withoutTurnCheckpoints((yield* adapter.listSessions())[0]?.resumeCursor), {
+          threadId: THREAD_ID,
+          resume: CLAUDE_FORK_SESSION_ID,
+          turnCount: 2,
+          turnStartMessageIds: [turnIds[0], `fork-${turnIds[1]}`],
+        });
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    });
   });
 
   it.effect("resets a Claude thread when rewind removes every recorded turn", () => {

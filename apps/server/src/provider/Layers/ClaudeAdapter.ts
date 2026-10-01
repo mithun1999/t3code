@@ -182,6 +182,8 @@ const conversationIndexForUuid = (
 // parentUuid chain, so system notices and compact metadata can change the
 // raw length without dropping retained user/assistant turns. Align those
 // conversation messages from the truncated end, then remap T3 turn starts.
+// Turns older than the last compaction are in neither history; they keep
+// their ids, so a later rewind that reaches them still refuses.
 const remapClaudeForkTurnBoundaries = (
   messages: ReadonlyArray<ClaudeHistoryMessage>,
   forkMessages: ReadonlyArray<ClaudeHistoryMessage>,
@@ -210,9 +212,13 @@ const remapClaudeForkTurnBoundaries = (
   ) {
     return undefined;
   }
-  const remapped = retainedBoundaries.map((originalId) => {
+  const firstInHistory = retainedBoundaries.findIndex(
+    (id) => id !== null && conversationIndexForUuid(messages, id) >= 0,
+  );
+  const compactedCount = firstInHistory === -1 ? retainedBoundaries.length : firstInHistory;
+  const remapped = retainedBoundaries.map((originalId, index) => {
     if (originalId === null) return null;
-    if (undeliveredBoundaries.has(originalId)) return originalId;
+    if (index < compactedCount || undeliveredBoundaries.has(originalId)) return originalId;
     const originalIndex = conversationIndexForUuid(messages, originalId);
     const forkIndex = originalIndex + offset;
     const forkMessage =

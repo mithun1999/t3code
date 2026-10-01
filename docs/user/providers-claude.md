@@ -53,6 +53,10 @@ You can also send `/compact` in an existing conversation. Web and desktop offer
 a large older thread. See [commands and skills](./composer.md#commands-and-skills)
 for using composer commands.
 
+You can still rewind a compacted conversation to any turn sent after its latest
+summary. Claude keeps only the summary of earlier turns, so rewinding to one of
+those isn't possible; start a new thread instead.
+
 ## Usage limits
 
 If your Claude subscription runs out of usage mid-turn, the thread shows which
