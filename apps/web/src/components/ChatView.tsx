@@ -10282,10 +10282,10 @@ export default function ChatView(props: ChatViewProps) {
               )}
             </div>
 
-            {/* Input bar — centered hero while a draft has no messages, docked at the bottom otherwise */}
+            {/* Input bar — centered hero while a draft has no messages, docked at the bottom otherwise.
+                It stays editable during a rewind: the prompt returns at once and only sending waits. */}
             <div
               ref={setComposerOverlayElement}
-              inert={isRevertingCheckpoint}
               data-chat-composer-overlay="true"
               className={
                 isDraftHeroState
