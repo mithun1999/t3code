@@ -1124,32 +1124,6 @@ export async function waitForStartedServerThread(
   });
 }
 
-export interface RewoundFile {
-  readonly path: string;
-  readonly repoRoot?: string;
-}
-
-/** Files the turns after `turnCount` changed, once each, for the rewind preview. */
-export function collectRewoundFiles(
-  checkpoints: ReadonlyArray<TurnDiffSummary>,
-  turnCount: number,
-): ReadonlyArray<RewoundFile> {
-  const files = new Map<string, RewoundFile>();
-  for (const checkpoint of checkpoints) {
-    if (checkpoint.checkpointTurnCount <= turnCount) continue;
-    for (const file of checkpoint.files) {
-      const key = `${file.repoRoot ?? ""}\u0000${file.path}`;
-      if (!files.has(key)) {
-        files.set(key, {
-          path: file.path,
-          ...(file.repoRoot === undefined ? {} : { repoRoot: file.repoRoot }),
-        });
-      }
-    }
-  }
-  return [...files.values()];
-}
-
 /** Stops the running turn and resolves once its checkpoint is captured, so a
     rewind counts the stopped turn like every other. */
 export async function waitForStoppedTurn(
@@ -1187,19 +1161,6 @@ export async function waitForStoppedTurn(
     }, timeoutMs);
     Promise.resolve().then(stop).then(inspect, finish);
   });
-}
-
-/** Hides the rewound prompt and everything after it, so a rewind shows at once
-    while the server forks the agent's session. */
-export function hideRewoundTimelineEntries(
-  entries: TimelineEntry[],
-  rewoundMessageId: MessageId | null,
-): TimelineEntry[] {
-  if (rewoundMessageId === null) return entries;
-  const index = entries.findIndex(
-    (entry) => entry.kind === "message" && entry.message.id === rewoundMessageId,
-  );
-  return index < 0 ? entries : entries.slice(0, index);
 }
 
 export async function waitForRevertedMessage(

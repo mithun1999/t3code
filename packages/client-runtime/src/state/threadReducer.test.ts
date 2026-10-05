@@ -1667,6 +1667,69 @@ describe("applyThreadDetailEvent", () => {
       }
     });
 
+    it("drops the rewound prompt when a provider-started turn has no prompt", () => {
+      const message = (
+        id: string,
+        role: "user" | "assistant",
+        turnId: string | null,
+        createdAt: string,
+      ) => ({
+        id: MessageId.make(id),
+        role,
+        text: id,
+        turnId: turnId === null ? null : TurnId.make(turnId),
+        streaming: false,
+        createdAt,
+        updatedAt: createdAt,
+      });
+      const checkpoint = (turn: number, userMessageId: string | null, completedAt: string) => ({
+        turnId: TurnId.make(`turn-${turn}`),
+        checkpointTurnCount: turn,
+        checkpointRef: CheckpointRef.make(`refs/t3/checkpoints/thread-1/turn/${turn}`),
+        status: "ready" as const,
+        files: [],
+        assistantMessageId: null,
+        ...(userMessageId === null ? {} : { userMessageId: MessageId.make(userMessageId) }),
+        completedAt,
+      });
+      const result = applyThreadDetailEvent(
+        {
+          ...baseThread,
+          messages: [
+            message("prompt-1", "user", null, "2026-04-01T01:00:00.000Z"),
+            message("reply-1", "assistant", "turn-1", "2026-04-01T01:10:00.000Z"),
+            // Turn 2 started by the provider after a background task: no prompt.
+            message("reply-2", "assistant", "turn-2", "2026-04-01T02:10:00.000Z"),
+            message("prompt-3", "user", null, "2026-04-01T03:00:00.000Z"),
+            message("reply-3", "assistant", "turn-3", "2026-04-01T03:10:00.000Z"),
+          ],
+          checkpoints: [
+            checkpoint(1, "prompt-1", "2026-04-01T01:20:00.000Z"),
+            checkpoint(2, null, "2026-04-01T02:20:00.000Z"),
+            checkpoint(3, null, "2026-04-01T03:20:00.000Z"),
+          ],
+        },
+        {
+          ...baseEventFields,
+          sequence: 14,
+          occurredAt: "2026-04-01T04:00:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.reverted",
+          payload: { threadId: ThreadId.make("thread-1"), turnCount: 2 },
+        },
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.messages.map((entry) => entry.id)).toEqual([
+          "prompt-1",
+          "reply-1",
+          "reply-2",
+        ]);
+      }
+    });
+
     it("filters entities to retained turns", () => {
       const threadWithData: OrchestrationThread = {
         ...baseThread,

@@ -116,9 +116,12 @@ import {
   CircleAlertIcon,
   DownloadIcon,
   EyeIcon,
+  FileTextIcon,
   GlobeIcon,
   HammerIcon,
+  LayersIcon,
   MessageCircleIcon,
+  MessageSquareIcon,
   Minimize2Icon,
   MousePointerClickIcon,
   PaintbrushIcon,
@@ -206,6 +209,7 @@ import {
 } from "./MessagesTimeline.logic";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { Spinner } from "../ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { WorktreeSetupCard } from "./WorktreeSetupCard";
@@ -279,7 +283,11 @@ interface TimelineRowSharedState {
   workspaceRoot: string | undefined;
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   activeThreadEnvironmentId: EnvironmentId;
-  onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
+  onRevertToTurnCount: (
+    targetTurnCount: number,
+    messageId: MessageId,
+    mode: RewindMode,
+  ) => Promise<void>;
   onUseArtifactTemplate: (template: CodexArtifactTemplate) => void;
   onRunShellCommand: ((command: string) => void) | undefined;
   onImageExpand: (preview: ExpandedImagePreview) => void;
@@ -428,7 +436,11 @@ interface MessagesTimelineProps {
   displayThreadKey?: string;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string, repoRoot?: string) => void;
   supportsConversationRollback: boolean;
-  onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
+  onRevertToTurnCount: (
+    targetTurnCount: number,
+    messageId: MessageId,
+    mode: RewindMode,
+  ) => Promise<void>;
   onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
   onRunShellCommand?: (command: string) => void;
   isRevertingCheckpoint: boolean;
@@ -2230,7 +2242,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           />
         </div>
       </div>
-      <div className="flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums opacity-0 transition-opacity duration-200 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover:opacity-100">
+      <div className="flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums opacity-0 transition-opacity duration-200 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover:opacity-100 has-data-popup-open:opacity-100">
         <div className="flex shrink-0 items-center gap-2">
           <Tooltip>
             <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>
@@ -2242,7 +2254,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           </Tooltip>
           <div className="flex items-center gap-0.5">
             {typeof revertTurnCount === "number" && (
-              <RevertUserMessageButton turnCount={revertTurnCount} messageId={row.message.id} />
+              <RewindUserMessageMenu turnCount={revertTurnCount} messageId={row.message.id} />
             )}
             {resolvedContext.text && (
               <MessageCopyButton
@@ -2292,7 +2304,24 @@ export function resolvePreviewAnnotationImage(input: {
   );
 }
 
-function RevertUserMessageButton({
+export type RewindMode = "conversation" | "files" | "both";
+
+const REWIND_MENU_ITEMS: ReadonlyArray<{
+  readonly mode: RewindMode;
+  readonly label: string;
+  readonly Icon: typeof Undo2Icon;
+}> = [
+  { mode: "conversation", label: "Rewind conversation", Icon: MessageSquareIcon },
+  { mode: "files", label: "Rewind files", Icon: FileTextIcon },
+  { mode: "both", label: "Rewind conversation and files", Icon: LayersIcon },
+];
+
+/**
+ * Paseo's rewind menu. The chosen option shows progress and the menu stays
+ * open until the rewind finishes, so nothing else can start meanwhile; the
+ * chat view owns the work and reports failures.
+ */
+function RewindUserMessageMenu({
   turnCount,
   messageId,
 }: {
@@ -2301,26 +2330,68 @@ function RevertUserMessageButton({
 }) {
   const ctx = use(TimelineRowCtx);
   const activity = use(TimelineRowActivityCtx);
+  const [open, setOpen] = useState(false);
+  const [pendingMode, setPendingMode] = useState<RewindMode | null>(null);
+  // A running turn is stopped first, so only another rewind blocks this.
+  const locked = pendingMode !== null || activity.isRevertingCheckpoint;
+
+  const select = async (mode: RewindMode) => {
+    if (locked) return;
+    setPendingMode(mode);
+    try {
+      await ctx.onRevertToTurnCount(turnCount, messageId, mode);
+    } finally {
+      setPendingMode(null);
+      setOpen(false);
+    }
+  };
 
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            type="button"
-            size="xs"
-            variant="ghost"
-            // A running turn is stopped first, so only another rewind blocks this.
-            disabled={activity.isRevertingCheckpoint}
-            onClick={() => ctx.onRevertToTurnCount(turnCount, messageId)}
-            aria-label="Edit from here"
-          />
-        }
-      >
-        <Undo2Icon className="size-3" />
-      </TooltipTrigger>
-      <TooltipPopup side="top">Edit from here</TooltipPopup>
-    </Tooltip>
+    <Menu
+      open={open}
+      onOpenChange={(next) => {
+        if (!next && pendingMode !== null) return;
+        setOpen(next);
+      }}
+    >
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <MenuTrigger
+              render={
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="ghost"
+                  disabled={locked}
+                  aria-label="Rewind to this message"
+                />
+              }
+            />
+          }
+        >
+          <Undo2Icon className="size-3" />
+        </TooltipTrigger>
+        <TooltipPopup side="top">Rewind to this message</TooltipPopup>
+      </Tooltip>
+      <MenuPopup align="end" side="bottom" className="min-w-55">
+        <div className="px-2 py-1.5 text-muted-foreground text-xs">
+          This action cannot be undone
+        </div>
+        <MenuSeparator />
+        {REWIND_MENU_ITEMS.map(({ mode, label, Icon }) => (
+          <MenuItem
+            key={mode}
+            closeOnClick={false}
+            disabled={locked && pendingMode !== mode}
+            onClick={() => void select(mode)}
+          >
+            {pendingMode === mode ? <Spinner /> : <Icon />}
+            {label}
+          </MenuItem>
+        ))}
+      </MenuPopup>
+    </Menu>
   );
 }
 

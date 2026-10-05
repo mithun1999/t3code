@@ -1072,6 +1072,101 @@ describe("orchestration projector", () => {
     ).toEqual([{ id: "assistant-keep", role: "assistant", turnId: "turn-1" }]);
   });
 
+  it("drops the rewound prompt when a provider-started turn has no prompt", async () => {
+    const createdAt = "2026-02-26T12:00:00.000Z";
+    const afterCreate = await Effect.runPromise(
+      projectEvent(
+        createEmptyReadModel(createdAt),
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-revert",
+          occurredAt: createdAt,
+          commandId: "cmd-create-revert",
+          payload: {
+            threadId: "thread-revert",
+            projectId: "project-1",
+            title: "demo",
+            modelSelection: {
+              provider: ProviderDriverKind.make("codex"),
+              model: "gpt-5.3-codex",
+            },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      ),
+    );
+    const prompt = (sequence: number, messageId: string, at: string) =>
+      makeEvent({
+        sequence,
+        type: "thread.message-sent",
+        aggregateKind: "thread",
+        aggregateId: "thread-revert",
+        occurredAt: at,
+        commandId: `cmd-${messageId}`,
+        payload: {
+          threadId: "thread-revert",
+          messageId,
+          role: "user",
+          text: messageId,
+          turnId: null,
+          streaming: false,
+          createdAt: at,
+          updatedAt: at,
+        },
+      });
+    const turnDone = (sequence: number, turn: number, at: string, userMessageId?: string) =>
+      makeEvent({
+        sequence,
+        type: "thread.turn-diff-completed",
+        aggregateKind: "thread",
+        aggregateId: "thread-revert",
+        occurredAt: at,
+        commandId: `cmd-turn-${turn}`,
+        payload: {
+          threadId: "thread-revert",
+          turnId: `turn-${turn}`,
+          checkpointTurnCount: turn,
+          checkpointRef: `refs/t3/checkpoints/thread-revert/turn/${turn}`,
+          status: "ready",
+          files: [],
+          assistantMessageId: null,
+          ...(userMessageId ? { userMessageId } : {}),
+          completedAt: at,
+        },
+      });
+    const events: ReadonlyArray<OrchestrationEvent> = [
+      prompt(2, "prompt-1", "2026-02-26T12:00:01.000Z"),
+      turnDone(3, 1, "2026-02-26T12:00:02.000Z", "prompt-1"),
+      // The provider starts turn 2 itself, after a background task: no prompt.
+      turnDone(4, 2, "2026-02-26T12:00:03.000Z"),
+      prompt(5, "prompt-3", "2026-02-26T12:00:04.000Z"),
+      turnDone(6, 3, "2026-02-26T12:00:05.000Z"),
+      makeEvent({
+        sequence: 7,
+        type: "thread.reverted",
+        aggregateKind: "thread",
+        aggregateId: "thread-revert",
+        occurredAt: "2026-02-26T12:00:06.000Z",
+        commandId: "cmd-revert",
+        payload: { threadId: "thread-revert", turnCount: 2 },
+      }),
+    ];
+
+    const afterRevert = await events.reduce<Promise<ReturnType<typeof createEmptyReadModel>>>(
+      (statePromise, event) =>
+        statePromise.then((state) => Effect.runPromise(projectEvent(state, event))),
+      Promise.resolve(afterCreate),
+    );
+
+    expect(afterRevert.threads[0]?.messages.map((message) => message.id)).toEqual(["prompt-1"]);
+  });
+
   it("caps message and checkpoint retention for long-lived threads", async () => {
     const createdAt = "2026-03-01T10:00:00.000Z";
     const model = createEmptyReadModel(createdAt);

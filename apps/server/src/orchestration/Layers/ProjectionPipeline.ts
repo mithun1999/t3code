@@ -240,6 +240,20 @@ function retainProjectionMessagesAfterRevert(
       retainedMessageIds.add(message.messageId);
     }
   }
+  // Turns the provider starts itself, after a background task for example,
+  // have no prompt, so a thread can hold fewer prompts than turns. Topping the
+  // count up must never keep a message sent after the last kept turn ended:
+  // that message belongs to a removed turn.
+  const lastKeptTurn = keptTurns.reduce<ProjectionTurn | undefined>(
+    (latest, turn) =>
+      latest === undefined || (turn.checkpointTurnCount ?? -1) > (latest.checkpointTurnCount ?? -1)
+        ? turn
+        : latest,
+    undefined,
+  );
+  const keptUntil = lastKeptTurn?.completedAt ?? null;
+  const sentByKeptTurns = (message: ProjectionThreadMessage) =>
+    keptUntil === null || compareDateTimeStrings(message.createdAt, keptUntil) <= 0;
 
   const retainedUserCount = messages.filter(
     (message) =>
@@ -254,7 +268,8 @@ function retainProjectionMessagesAfterRevert(
         (message) =>
           message.role === "user" &&
           !retainedMessageIds.has(message.messageId) &&
-          (message.turnId === null || retainedTurnIds.has(message.turnId)),
+          (message.turnId === null || retainedTurnIds.has(message.turnId)) &&
+          sentByKeptTurns(message),
       )
       .toSorted(
         (left, right) =>
@@ -280,7 +295,8 @@ function retainProjectionMessagesAfterRevert(
         (message) =>
           message.role === "assistant" &&
           !retainedMessageIds.has(message.messageId) &&
-          (message.turnId === null || retainedTurnIds.has(message.turnId)),
+          (message.turnId === null || retainedTurnIds.has(message.turnId)) &&
+          sentByKeptTurns(message),
       )
       .toSorted(
         (left, right) =>

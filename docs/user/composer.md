@@ -102,20 +102,23 @@ the text is an unedited recalled prompt, with the caret on the first visual line
 the last visual line for `ArrowDown`, counting wrapped lines. Editing a recalled prompt turns it
 into a normal draft.
 
-## Edit an earlier prompt
+## Rewind to an earlier prompt
 
-On web and desktop, choose **Edit from here** beneath a sent message, including one
-whose turn you stopped before it finished. If the agent is still working, its turn
-stops first. The dialog lists the files that changed after that message. Then choose:
+On web and desktop, hover a sent message, including one whose turn you stopped
+before it finished, and choose the rewind button (**Rewind to this message**).
+The menu warns that the action can't be undone. Then choose:
 
-- **Restore conversation** rewinds the conversation to before that message and
+- **Rewind conversation** rewinds the conversation to before that message and
   leaves workspace files as they are.
-- **Restore code** returns files to their state before that message and keeps the
+- **Rewind files** returns files to their state before that message and keeps the
   conversation.
-- **Restore code and conversation** does both.
+- **Rewind conversation and files** does both.
 
-Restoring the conversation returns the selected prompt and its attachments to the
-composer for editing and resending. Any unsent draft stays above the restored prompt.
+If the agent is still working, its turn stops first. The option you chose shows
+progress and the menu stays open until the rewind finishes; if it fails, a message
+says why. When the conversation is rewound, the chat scrolls to the end and the
+prompt returns to the composer with its attachments, ready to edit and send. A
+draft you had already typed is kept instead.
 
 How code is restored depends on where the thread works:
 

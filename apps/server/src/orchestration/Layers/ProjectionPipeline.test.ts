@@ -4029,6 +4029,118 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
     }),
   );
 
+  it.effect("drops the rewound prompt when a provider-started turn has no prompt", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("thread-agent-turn");
+      let sequence = 0;
+      const appendAndProject = (event: {
+        readonly type: string;
+        readonly occurredAt: string;
+        readonly payload: unknown;
+        readonly aggregateKind?: "project" | "thread";
+        readonly aggregateId?: string;
+      }) => {
+        sequence += 1;
+        return eventStore
+          .append({
+            eventId: EventId.make(`evt-agent-turn-${sequence}`),
+            aggregateKind: event.aggregateKind ?? "thread",
+            aggregateId: event.aggregateId ?? threadId,
+            commandId: CommandId.make(`cmd-agent-turn-${sequence}`),
+            causationEventId: null,
+            correlationId: CorrelationId.make(`cmd-agent-turn-${sequence}`),
+            metadata: {},
+            ...event,
+          } as Parameters<typeof eventStore.append>[0])
+          .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+      };
+      const prompt = (messageId: string, at: string) =>
+        appendAndProject({
+          type: "thread.message-sent",
+          occurredAt: at,
+          payload: {
+            threadId,
+            messageId: MessageId.make(messageId),
+            role: "user",
+            text: messageId,
+            turnId: null,
+            streaming: false,
+            createdAt: at,
+            updatedAt: at,
+          },
+        });
+      const turnDone = (turn: number, at: string, userMessageId?: string) =>
+        appendAndProject({
+          type: "thread.turn-diff-completed",
+          occurredAt: at,
+          payload: {
+            threadId,
+            turnId: TurnId.make(`turn-${turn}`),
+            checkpointTurnCount: turn,
+            checkpointRef: CheckpointRef.make(`refs/t3/checkpoints/thread-agent-turn/turn/${turn}`),
+            status: "ready",
+            files: [],
+            assistantMessageId: null,
+            ...(userMessageId ? { userMessageId: MessageId.make(userMessageId) } : {}),
+            completedAt: at,
+          },
+        });
+
+      yield* appendAndProject({
+        type: "project.created",
+        aggregateKind: "project",
+        aggregateId: "project-agent-turn",
+        occurredAt: "2026-02-26T12:00:00.000Z",
+        payload: {
+          projectId: ProjectId.make("project-agent-turn"),
+          title: "Project",
+          workspaceRoot: "/tmp/project-agent-turn",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: "2026-02-26T12:00:00.000Z",
+          updatedAt: "2026-02-26T12:00:00.000Z",
+        },
+      });
+      yield* appendAndProject({
+        type: "thread.created",
+        occurredAt: "2026-02-26T12:00:00.500Z",
+        payload: {
+          threadId,
+          projectId: ProjectId.make("project-agent-turn"),
+          title: "Thread",
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: "2026-02-26T12:00:00.500Z",
+          updatedAt: "2026-02-26T12:00:00.500Z",
+        },
+      });
+      yield* prompt("prompt-1", "2026-02-26T12:00:01.000Z");
+      yield* turnDone(1, "2026-02-26T12:00:02.000Z", "prompt-1");
+      // The provider starts turn 2 itself, after a background task: no prompt.
+      yield* turnDone(2, "2026-02-26T12:00:03.000Z");
+      yield* prompt("prompt-3", "2026-02-26T12:00:04.000Z");
+      yield* turnDone(3, "2026-02-26T12:00:05.000Z");
+      yield* appendAndProject({
+        type: "thread.reverted",
+        occurredAt: "2026-02-26T12:00:06.000Z",
+        payload: { threadId, turnCount: 2 },
+      });
+
+      const messageRows = yield* sql<{ readonly messageId: string }>`
+        SELECT message_id AS "messageId"
+        FROM projection_thread_messages
+        WHERE thread_id = 'thread-agent-turn'
+        ORDER BY created_at ASC
+      `;
+      assert.deepEqual(messageRows, [{ messageId: "prompt-1" }]);
+    }),
+  );
+
   it.effect("does not let a later missing placeholder clobber a ready checkpoint", () =>
     Effect.gen(function* () {
       const projectionPipeline = yield* OrchestrationProjectionPipeline;

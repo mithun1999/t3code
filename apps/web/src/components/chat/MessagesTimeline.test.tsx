@@ -206,7 +206,7 @@ function buildProps() {
     routeThreadKey: "environment-local:thread-1",
     onOpenTurnDiff: () => {},
     supportsConversationRollback: false,
-    onRevertToTurnCount: () => {},
+    onRevertToTurnCount: async () => {},
     isRevertingCheckpoint: false,
     onImageExpand: () => {},
     activeThreadEnvironmentId: ACTIVE_THREAD_ENVIRONMENT_ID,

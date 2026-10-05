@@ -226,7 +226,12 @@ function retainThreadMessagesAfterRevert(
   retainedTurnIds: ReadonlySet<string>,
   turnCount: number,
   retainedUserMessageIds: ReadonlySet<string> = new Set(),
+  keptUntil: string | null = null,
 ): ReadonlyArray<OrchestrationMessage> {
+  // Provider-started turns have no prompt, so topping the count up must never
+  // keep a message sent after the last kept turn ended: it began a removed turn.
+  const sentByKeptTurns = (message: OrchestrationMessage) =>
+    keptUntil === null || compareDateTimeStrings(message.createdAt, keptUntil) <= 0;
   const retainedMessageIds = new Set<string>();
   for (const message of messages) {
     if (message.role === "system" || isImportedAgentSessionMessageId(message.id)) {
@@ -254,7 +259,8 @@ function retainThreadMessagesAfterRevert(
         (message) =>
           message.role === "user" &&
           !retainedMessageIds.has(message.id) &&
-          (message.turnId === null || retainedTurnIds.has(message.turnId)),
+          (message.turnId === null || retainedTurnIds.has(message.turnId)) &&
+          sentByKeptTurns(message),
       )
       .toSorted(
         (left, right) =>
@@ -280,7 +286,8 @@ function retainThreadMessagesAfterRevert(
         (message) =>
           message.role === "assistant" &&
           !retainedMessageIds.has(message.id) &&
-          (message.turnId === null || retainedTurnIds.has(message.turnId)),
+          (message.turnId === null || retainedTurnIds.has(message.turnId)) &&
+          sentByKeptTurns(message),
       )
       .toSorted(
         (left, right) =>
@@ -1050,6 +1057,7 @@ export function projectEvent(
             retainedTurnIds,
             payload.turnCount,
             new Set(checkpoints.flatMap((checkpoint) => checkpoint.userMessageId ?? [])),
+            checkpoints.at(-1)?.completedAt ?? null,
           ).slice(-MAX_THREAD_MESSAGES);
           const proposedPlans = retainThreadProposedPlansAfterRevert(
             thread.proposedPlans,

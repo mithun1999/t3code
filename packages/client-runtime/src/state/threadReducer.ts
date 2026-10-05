@@ -644,6 +644,7 @@ export function applyThreadDetailEvent(
         retainedTurnIds,
         event.payload.turnCount,
         new Set(checkpoints.flatMap((entry) => entry.userMessageId ?? [])),
+        checkpoints.at(-1)?.completedAt ?? null,
       );
       const proposedPlans = pipe(
         thread.proposedPlans,
@@ -839,7 +840,13 @@ function retainMessagesAfterRevert(
   retainedTurnIds: ReadonlySet<string>,
   turnCount: number,
   retainedUserMessageIds: ReadonlySet<string> = new Set(),
+  keptUntil: string | null = null,
 ): OrchestrationMessage[] {
+  // Provider-started turns have no prompt, and only part of a long thread is
+  // loaded, so topping the count up must never keep a message sent after the
+  // last kept turn ended: it began a removed turn.
+  const sentByKeptTurns = (message: OrchestrationMessage) =>
+    keptUntil === null || compareDateTimeStrings(message.createdAt, keptUntil) <= 0;
   const retainedMessageIds = new Set<string>();
   for (const message of messages) {
     if (message.role === "system" || isImportedAgentSessionMessageId(message.id)) {
@@ -864,7 +871,8 @@ function retainMessagesAfterRevert(
         (message) =>
           message.role === role &&
           !retainedMessageIds.has(message.id) &&
-          (message.turnId === null || retainedTurnIds.has(message.turnId)),
+          (message.turnId === null || retainedTurnIds.has(message.turnId)) &&
+          sentByKeptTurns(message),
       )
       // `.sort()`, not `.toSorted()`: `.filter()` above already returned a fresh array, and
       // this is shared with mobile, which runs on Hermes and has no ES2023 array methods.
