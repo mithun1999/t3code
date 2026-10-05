@@ -65,6 +65,13 @@ import { GitVcsDriver } from "../vcs/GitVcsDriver.ts";
 import { ThreadDeletionReactor } from "./Services/ThreadDeletionReactor.ts";
 import { ProviderService } from "../provider/Services/ProviderService.ts";
 
+// Upstream's defaults. The fork turns both off, so tests of settling opt in.
+const SETTLING_SETTINGS = {
+  ...DEFAULT_SERVER_SETTINGS,
+  sidebarAutoSettleAfterDays: 3,
+  sidebarAutoSettleOnMerge: true,
+};
+
 const NOW = "2026-08-28T12:00:00.000Z";
 const PROJECT_ID = ProjectId.make("settlement-project");
 const LINKED_PROJECT_ID = ProjectId.make("linked-settlement-project");
@@ -196,7 +203,7 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
   const snapshotReadCount = yield* Ref.make(0);
   // Each shell read: a thread id for a one-thread read, null for a full read.
   const snapshotReads = yield* Queue.unbounded<ThreadId | null>();
-  const settings = yield* Ref.make(options.settings ?? DEFAULT_SERVER_SETTINGS);
+  const settings = yield* Ref.make(options.settings ?? SETTLING_SETTINGS);
   const settingsReads = yield* Queue.unbounded<ServerSettings>();
   const settingsChanges = yield* PubSub.unbounded<ServerSettings>();
   const mergedPullRequests = yield* PubSub.unbounded<PullRequestMergeEvent>();
@@ -355,11 +362,11 @@ const startHarness = Effect.fn("startThreadSettlementHarness")(function* (
 describe("ThreadSettlementReactor", () => {
   it("distinguishes a project that inherits the threshold from one that disables it", () => {
     const inherits = ThreadSettlementReactor.autoSettlementSettingsKey({
-      ...DEFAULT_SERVER_SETTINGS,
+      ...SETTLING_SETTINGS,
       projectSettingsOverrides: { [PROJECT_ID]: { sidebarAutoSettleOnMerge: true } },
     });
     const never = ThreadSettlementReactor.autoSettlementSettingsKey({
-      ...DEFAULT_SERVER_SETTINGS,
+      ...SETTLING_SETTINGS,
       projectSettingsOverrides: {
         [PROJECT_ID]: { sidebarAutoSettleOnMerge: true, sidebarAutoSettleAfterDays: null },
       },
@@ -369,11 +376,11 @@ describe("ThreadSettlementReactor", () => {
 
   it("ignores project overrides that do not touch settlement", () => {
     const base = ThreadSettlementReactor.autoSettlementSettingsKey({
-      ...DEFAULT_SERVER_SETTINGS,
+      ...SETTLING_SETTINGS,
       projectSettingsOverrides: { [PROJECT_ID]: { sidebarAutoSettleOnMerge: false } },
     });
     const unrelated = ThreadSettlementReactor.autoSettlementSettingsKey({
-      ...DEFAULT_SERVER_SETTINGS,
+      ...SETTLING_SETTINGS,
       projectSettingsOverrides: {
         [LINKED_PROJECT_ID]: { defaultThreadEnvMode: "worktree" },
         [PROJECT_ID]: { sidebarAutoSettleOnMerge: false, defaultAutoPull: true },
@@ -432,7 +439,7 @@ describe("ThreadSettlementReactor", () => {
           ];
           const fixture = yield* makeHarness({
             snapshot: makeSnapshot(threads),
-            settings: { ...DEFAULT_SERVER_SETTINGS, sidebarAutoSettleOnMerge: true },
+            settings: { ...SETTLING_SETTINGS, sidebarAutoSettleOnMerge: true },
             branchPullRequest: () => Effect.die("linked threads must not query the branch"),
             pullRequestSummary: () => Effect.die("linked threads must use their snapshots"),
           });
@@ -528,7 +535,7 @@ describe("ThreadSettlementReactor", () => {
             [makeProject()],
           ),
           settings: {
-            ...DEFAULT_SERVER_SETTINGS,
+            ...SETTLING_SETTINGS,
             sidebarAutoSettleAfterDays: null,
             sidebarAutoSettleOnMerge: true,
           },
@@ -593,7 +600,7 @@ describe("ThreadSettlementReactor", () => {
             [project],
           ),
           settings: {
-            ...DEFAULT_SERVER_SETTINGS,
+            ...SETTLING_SETTINGS,
             sidebarAutoSettleAfterDays: null,
             sidebarAutoSettleOnMerge: true,
           },
@@ -626,7 +633,7 @@ describe("ThreadSettlementReactor", () => {
     ),
   );
 
-  it.effect("skips PR work on startup, timer and merge sweeps when settlement is disabled", () =>
+  it.effect("skips PR work on startup, timer and merge sweeps with the default settings", () =>
     Effect.scoped(
       Effect.gen(function* () {
         yield* TestClock.setTime(Date.parse(NOW));
@@ -642,11 +649,8 @@ describe("ThreadSettlementReactor", () => {
               },
             }),
           ]),
-          settings: {
-            ...DEFAULT_SERVER_SETTINGS,
-            sidebarAutoSettleAfterDays: null,
-            sidebarAutoSettleOnMerge: false,
-          },
+          // T3 Code Personal ships with both settlement settings off.
+          settings: DEFAULT_SERVER_SETTINGS,
         });
 
         yield* Effect.gen(function* () {
@@ -696,7 +700,7 @@ describe("ThreadSettlementReactor", () => {
             [makeProject(), makeProject(overriddenProject, "/workspace/overridden")],
           ),
           settings: {
-            ...DEFAULT_SERVER_SETTINGS,
+            ...SETTLING_SETTINGS,
             sidebarAutoSettleAfterDays: null,
             sidebarAutoSettleOnMerge: false,
             projectSettingsOverrides: {
@@ -1044,7 +1048,7 @@ describe("ThreadSettlementReactor", () => {
             }),
           ]),
           settings: {
-            ...DEFAULT_SERVER_SETTINGS,
+            ...SETTLING_SETTINGS,
             sidebarAutoSettleAfterDays: null,
             sidebarAutoSettleOnMerge: true,
           },

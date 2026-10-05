@@ -325,9 +325,10 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
         const changes = yield* serverSettings.subscribeChanges;
 
+        // Both rules are off by default, so turning them on is what persists.
         const next = yield* serverSettings.updateSettings({
-          sidebarAutoSettleAfterDays: null,
-          sidebarAutoSettleOnMerge: false,
+          sidebarAutoSettleAfterDays: 7,
+          sidebarAutoSettleOnMerge: true,
         });
         const change = Option.getOrUndefined(yield* Stream.runHead(changes));
         const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
@@ -335,12 +336,12 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         // @effect-diagnostics-next-line preferSchemaOverJson:off
         const persisted = JSON.parse(raw) as Record<string, unknown>;
 
-        assert.strictEqual(next.sidebarAutoSettleAfterDays, null);
-        assert.isFalse(next.sidebarAutoSettleOnMerge);
-        assert.strictEqual(change?.sidebarAutoSettleAfterDays, null);
-        assert.isFalse(change?.sidebarAutoSettleOnMerge);
-        assert.strictEqual(persisted.sidebarAutoSettleAfterDays, null);
-        assert.isFalse(persisted.sidebarAutoSettleOnMerge);
+        assert.strictEqual(next.sidebarAutoSettleAfterDays, 7);
+        assert.isTrue(next.sidebarAutoSettleOnMerge);
+        assert.strictEqual(change?.sidebarAutoSettleAfterDays, 7);
+        assert.isTrue(change?.sidebarAutoSettleOnMerge);
+        assert.strictEqual(persisted.sidebarAutoSettleAfterDays, 7);
+        assert.isTrue(persisted.sidebarAutoSettleOnMerge);
       }),
     ).pipe(Effect.provide(makeServerSettingsLayer())),
   );

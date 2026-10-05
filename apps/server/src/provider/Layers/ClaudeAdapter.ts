@@ -88,6 +88,7 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import { forkClaudeSessionKeepingTitle } from "../../claudeHistoryWorker.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
@@ -3681,10 +3682,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     // error rows in client work logs. `vcs_state_changed`
     // ({kind: commit|push|rebase}) and `code_change_published`
     // ({provider, url, repo}) are informational CLI notices; the work log
-    // already shows the underlying git/gh tool calls.
+    // already shows the underlying git/gh tool calls. `session_title_changed`
+    // is Claude's own session naming, which T3 titles separately.
     switch (message.subtype as string) {
       case "vcs_state_changed":
       case "code_change_published":
+      case "session_title_changed":
         return;
     }
 
@@ -5723,7 +5726,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
               };
               if (options?.forkSession) return options.forkSession(sessionId, forkOptions);
               if (claudeEnvironment.CLAUDE_CONFIG_DIR === process.env.CLAUDE_CONFIG_DIR) {
-                return forkSession(sessionId, forkOptions);
+                return forkClaudeSessionKeepingTitle(sessionId, forkOptions);
               }
               return decodeHistoryFork(await runScopedHistoryCommand("forkSession", forkOptions));
             },
