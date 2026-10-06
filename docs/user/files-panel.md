@@ -18,6 +18,14 @@ file, double-clicking its tab, or double-clicking it in the explorer keeps the
 tab open. When two tabs share a name, each shows the repo or folder it comes
 from, such as `hello.py repo-a`.
 
+## Links to files
+
+A file path in the chat opens in the Files panel. Agents often write a path
+relative to the folder they were working in, such as `app/utils/hostApp.ts`
+inside `popups/apps/popups-editor`. When a path isn't at the top of the
+workspace, T3 Code opens the workspace file that ends with it, or lists the
+files when there are several.
+
 ## Explorer
 
 The explorer lists your workspace. In a multi-repo workspace each repository is

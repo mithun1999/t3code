@@ -1,3 +1,4 @@
+import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
 import type {
   ChatFileAttachment,
@@ -48,6 +49,7 @@ import { buildFileReviewComment } from "~/reviewCommentContext";
 import { assetEnvironment } from "~/state/assets";
 import { useEnvironmentHttpBaseUrl, usePrimaryEnvironmentId } from "~/state/environments";
 import { previewEnvironment } from "~/state/preview";
+import { useProjectPathSearch } from "~/state/queries";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 
@@ -94,6 +96,7 @@ import { ScmDiffView } from "./workbench/ScmDiffView";
 import { scmChangeCount } from "./workbench/scmPresentation";
 import { type ScmCompare, SourceControlPanel } from "./workbench/SourceControlPanel";
 import { SearchPanel, type SearchViewRequest } from "./workbench/SearchPanel";
+import { findMissingFileCandidates, missingFileLookupPath } from "./missingFileCandidates";
 import { useScmStatuses } from "./workbench/useScmStatuses";
 import { changeTouchesFile, useWorkspaceChanges } from "./workbench/useWorkspaceChanges";
 import type { FileSurfaceCompare } from "~/rightPanelStore";
@@ -150,6 +153,7 @@ interface FilePreviewPanelProps {
 }
 
 const FILE_EXPLORER_STORAGE_KEY = "t3code.fileExplorerOpen";
+const MISSING_FILE_LOOKUP_LIMIT = 100;
 const SIDE_BAR_WIDTH_STORAGE_KEY = "t3code.workbenchSideBarWidth";
 const RENDER_MARKDOWN_STORAGE_KEY = "t3code.renderMarkdown";
 const RENDER_BROWSER_FILE_STORAGE_KEY = "t3code.renderBrowserFile";
@@ -1041,6 +1045,56 @@ export default function FilePreviewPanel({
   // VS Code's layout: an activity bar picks the side bar view (explorer or
   // source control), and the editor fills the rest.
   const workbenchAvailable = attachment === undefined && !isHostFile && cwd !== "";
+  // A path an agent wrote relative to the folder it changed into isn't at the
+  // workspace root: look for the workspace files that end with it.
+  const missingLookupPath =
+    workbenchAvailable &&
+    relativePath !== null &&
+    file.error !== null &&
+    file.data === null &&
+    !file.isNotFile &&
+    !compare
+      ? missingFileLookupPath(relativePath)
+      : null;
+  const missingLookup = useProjectPathSearch(
+    {
+      environmentId: missingLookupPath ? environmentId : null,
+      cwd: missingLookupPath ? cwd : null,
+      query: missingLookupPath,
+      kind: "file",
+      ranking: "vscode",
+    },
+    MISSING_FILE_LOOKUP_LIMIT,
+  );
+  const missingCandidates = useMemo(
+    () =>
+      missingLookupPath && !missingLookup.isPending
+        ? findMissingFileCandidates(
+            missingLookup.entries.map((entry) => entry.path),
+            missingLookupPath,
+          )
+        : null,
+    [missingLookup.entries, missingLookup.isPending, missingLookupPath],
+  );
+  const openMissingCandidate = (candidate: string) => {
+    if (relativePath === null) return;
+    // In place when the tab reads from the workspace root, so it keeps its line.
+    if (!fileRoot) {
+      useRightPanelStore
+        .getState()
+        .retargetFileSurfaces(threadRef, { fromPath: relativePath, toPath: candidate });
+    } else {
+      useRightPanelStore
+        .getState()
+        .openFile(threadRef, candidate, revealLine ?? undefined, undefined, { preview: true });
+    }
+  };
+  const openMissingCandidateRef = useRef(openMissingCandidate);
+  openMissingCandidateRef.current = openMissingCandidate;
+  const onlyCandidate = missingCandidates?.length === 1 ? missingCandidates[0]! : null;
+  useEffect(() => {
+    if (onlyCandidate) openMissingCandidateRef.current(onlyCandidate);
+  }, [onlyCandidate]);
   const showSideBar =
     workbenchAvailable &&
     shouldShowFileExplorer({
@@ -1468,9 +1522,36 @@ export default function FilePreviewPanel({
                   workspaceMutationId={workspaceMutationId}
                 />
               ) : relativePath && file.error && file.data === null ? (
-                <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs leading-relaxed text-destructive">
-                  {file.error}
-                </div>
+                missingLookupPath && (missingCandidates === null || onlyCandidate) ? (
+                  <div className="flex min-h-0 flex-1 items-center justify-center gap-2 px-6 text-xs text-muted-foreground">
+                    <Spinner size="sm" /> Looking for {missingLookupPath} in the workspace…
+                  </div>
+                ) : missingCandidates && missingCandidates.length > 1 ? (
+                  <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-xs">
+                    <p className="text-center leading-relaxed text-muted-foreground">
+                      {missingLookupPath} isn't at the top of the workspace. These files end with
+                      it:
+                    </p>
+                    <div className="flex max-w-full flex-col gap-0.5">
+                      {missingCandidates.map((candidate) => (
+                        <Button
+                          key={candidate}
+                          type="button"
+                          variant="ghost"
+                          size="xs"
+                          className="justify-start"
+                          onClick={() => openMissingCandidate(candidate)}
+                        >
+                          <span className="font-mono">{candidate}</span>
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs leading-relaxed text-destructive">
+                    {file.error}
+                  </div>
+                )
               ) : relativePath && file.data === null ? (
                 <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground">
                   <Spinner size="lg" />
