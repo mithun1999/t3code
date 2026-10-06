@@ -76,6 +76,11 @@ export const workspaceIde = {
     tag: WS_METHODS.workspaceDeleteEntries,
     scheduler: entryScheduler,
   }),
+  replaceInFiles: createEnvironmentRpcCommand(connectionAtomRuntime, {
+    label: "environment-data:workspace:replace-in-files",
+    tag: WS_METHODS.workspaceReplaceInFiles,
+    scheduler: entryScheduler,
+  }),
   stage: createEnvironmentRpcCommand(connectionAtomRuntime, {
     label: "environment-data:scm:stage",
     tag: WS_METHODS.scmStage,

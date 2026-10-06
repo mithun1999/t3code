@@ -299,7 +299,14 @@ interface ProjectContentSearchTarget {
   readonly caseSensitive: boolean;
   readonly wholeWord: boolean;
   readonly useRegex: boolean;
+  /** The Search view's "files to include" and "files to exclude". */
+  readonly includes?: string;
+  readonly excludes?: string;
+  /** The Search view wants complete results rather than a quick first page. */
+  readonly thorough?: boolean;
 }
+
+const THOROUGH_CONTENT_SEARCH = { limit: 5000, timeBudgetMs: 5000, maxMatchesPerFile: 1000 };
 
 export function useProjectContentSearch(target: ProjectContentSearchTarget) {
   // Whitespace is significant in content queries; trimming is only used to
@@ -317,10 +324,14 @@ export function useProjectContentSearch(target: ProjectContentSearchTarget) {
           input: {
             cwd: target.cwd,
             query: debouncedQuery,
-            limit: PROJECT_CONTENT_SEARCH_LIMIT,
             caseSensitive: target.caseSensitive,
             wholeWord: target.wholeWord,
             useRegex: target.useRegex,
+            ...(target.thorough
+              ? THOROUGH_CONTENT_SEARCH
+              : { limit: PROJECT_CONTENT_SEARCH_LIMIT }),
+            ...(target.includes?.trim() ? { includes: target.includes } : {}),
+            ...(target.excludes?.trim() ? { excludes: target.excludes } : {}),
           },
         })
       : null,
@@ -333,6 +344,7 @@ export function useProjectContentSearch(target: ProjectContentSearchTarget) {
     hasQuery,
     truncated: result.data?.truncated ?? false,
     invalidRegex: target.useRegex && result.data?.regexFallbackError !== undefined,
+    refresh: result.refresh,
   };
 }
 

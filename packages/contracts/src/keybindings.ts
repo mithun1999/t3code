@@ -70,6 +70,7 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "files.toggleSideBar",
   "files.showExplorer",
   "files.showSourceControl",
+  "files.showReplace",
   "pullRequest.copyNumber",
   "diff.toggle",
   "preview.toggle",

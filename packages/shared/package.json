@@ -179,6 +179,10 @@
       "types": "./src/fuzzyScorer.ts",
       "import": "./src/fuzzyScorer.ts"
     },
+    "./searchReplace": {
+      "types": "./src/searchReplace.ts",
+      "import": "./src/searchReplace.ts"
+    },
     "./qrCode": {
       "types": "./src/qrCode.ts",
       "import": "./src/qrCode.ts"

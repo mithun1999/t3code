@@ -116,6 +116,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.workspaceMoveEntry]: AuthOrchestrationOperateScope,
   [WS_METHODS.workspaceCopyEntry]: AuthOrchestrationOperateScope,
   [WS_METHODS.workspaceDeleteEntries]: AuthOrchestrationOperateScope,
+  [WS_METHODS.workspaceReplaceInFiles]: AuthOrchestrationOperateScope,
   [WS_METHODS.subscribeWorkspaceChanges]: AuthOrchestrationReadScope,
   [WS_METHODS.scmStatus]: AuthOrchestrationReadScope,
   [WS_METHODS.scmReadFile]: AuthOrchestrationReadScope,

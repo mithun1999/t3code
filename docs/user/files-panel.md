@@ -6,8 +6,9 @@ diff you open fills the rest. Choose the active view's icon again to hide the
 side bar.
 
 While the panel has the keyboard, VS Code's view keys work: ⌘B hides or shows
-the side bar, ⇧⌘E shows the Explorer and ⌃⇧G shows Source Control. Elsewhere
-those keys keep their usual meaning (⌘B still toggles the thread sidebar).
+the side bar, ⇧⌘E shows the Explorer, ⇧⌘H shows Search with replace, and ⌃⇧G
+shows Source Control. Elsewhere those keys keep their usual meaning (⌘B still
+toggles the thread sidebar). ⇧⌘F opens Search from anywhere in a thread.
 
 ## Tabs
 
@@ -39,6 +40,28 @@ dimmed.
 The server watches the workspace, so files an agent or another program
 creates, renames or deletes appear without a refresh. The tree keeps the
 folders you opened when you switch to another tab and back.
+
+## Search
+
+The Search view finds text across the workspace and replaces it, as VS Code's
+does. Press ⇧⌘F, or choose the magnifying glass in the activity bar. Text you
+selected in the chat fills in the search.
+
+- **Aa** matches case, **ab** matches whole words, and **.\*** searches with a
+  regular expression.
+- Choose **…** for **files to include** and **files to exclude**: comma-separated
+  patterns such as `*.ts, src/components` or `node_modules, *.test.ts`. A
+  pattern matches in any folder unless it starts with `./`. Files ignored by git
+  aren't searched.
+- Results are grouped by file. Select one to open the file at that line. Hover a
+  file or a result to dismiss it, or press Delete on a result.
+
+Choose the arrow left of the search box, or press ⇧⌘H, to show **Replace**. The
+results then preview each change. Hover a result or a file for **Replace** or
+**Replace All**, or replace every result with the button beside the field
+(⌥⌘Enter), which asks first. With a regular expression, `$1` and `$<name>`
+insert captured groups, `$&` the whole match, and `\n` a new line. If a file
+changed since the search, a result that moved is left alone and T3 Code says so.
 
 ## Source Control
 

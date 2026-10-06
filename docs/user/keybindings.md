@@ -122,6 +122,11 @@ terminals so native undo keeps working there.
 `navigation.back` (`mod+[` by default) and `navigation.forward` (`mod+]`) move
 through the pages you have visited, like a browser's back and forward buttons.
 
+`projectSearch.toggle` (`mod+shift+f` by default) opens the Search view in the
+thread's Files panel, or a search dialog when no thread is open.
+`files.showReplace` (`mod+shift+h` while the Files panel has the keyboard) opens
+it with the replace field. See [Search](./files-panel.md#search).
+
 `chat.new` may ask you to choose a project when there is more than one.
 `chat.newLocal` skips that chooser. Both use your
 [new-thread defaults](./thread-sidebar.md#start-a-thread).

@@ -32,6 +32,7 @@ import {
   type EnvironmentMachineKind,
   type FilesystemBrowseResult,
   type ProjectId,
+  type ScopedThreadRef,
   type SourceControlDiscoveryResult,
   type SourceControlProviderKind,
   type SourceControlRepositoryInfo,
@@ -121,6 +122,7 @@ import {
   useRightPanelStore,
 } from "../rightPanelStore";
 import { getLatestThreadForProject, sortThreads } from "../lib/threadSort";
+import { requestWorkbenchView } from "../workbenchView";
 import {
   cn,
   getLocalFileManagerName,
@@ -463,6 +465,20 @@ const OVERLAY_MODE_BY_COMMAND = {
   "projectSearch.toggle": "content",
 } as const satisfies Partial<Record<string, SearchOverlayMode>>;
 
+/**
+ * ⇧⌘F in a thread: VS Code's Search view in the thread's Files panel, seeded
+ * with a one-line text selection as VS Code does.
+ */
+function openWorkbenchSearch(threadRef: ScopedThreadRef): void {
+  const selection = window.getSelection()?.toString() ?? "";
+  const query =
+    selection.length > 0 && selection.length <= 200 && !selection.includes("\n")
+      ? selection
+      : undefined;
+  useRightPanelStore.getState().revealWorkbench(threadRef);
+  requestWorkbenchView({ view: "search", ...(query ? { query } : {}) });
+}
+
 function overlayModeForCommand(command: string | null): SearchOverlayMode | null {
   if (command === null) return null;
   return command in OVERLAY_MODE_BY_COMMAND
@@ -571,6 +587,13 @@ export function CommandPalette({ children }: { children: ReactNode }) {
         void navigate({ to: "/usage" });
         return;
       }
+      if (command === "projectSearch.toggle" && routeThreadRef) {
+        event.preventDefault();
+        event.stopPropagation();
+        setOpen(false);
+        openWorkbenchSearch(routeThreadRef);
+        return;
+      }
       const mode = overlayModeForCommand(command);
       if (mode === null) {
         return;
@@ -587,6 +610,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
     navigate,
     previewOpen,
     resolvedTheme,
+    routeThreadRef,
     setAppearanceMode,
     setOpen,
     terminalOpen,
@@ -1859,9 +1883,14 @@ function OpenCommandPaletteDialog(props: {
     searchTerms: ["search project", "find in files", "grep", "content search", "text search"],
     title: "Search project contents",
     icon: <TextSearchIcon className={ITEM_ICON_CLASS} />,
-    keepOpen: true,
+    // In a thread this opens the Files panel's Search view instead.
+    keepOpen: activeThread === null,
     shortcutCommand: "projectSearch.toggle",
     run: async () => {
+      if (activeThread !== null) {
+        openWorkbenchSearch(scopeThreadRef(activeThread.environmentId, activeThread.id));
+        return;
+      }
       openOverlayMode("content");
     },
   });

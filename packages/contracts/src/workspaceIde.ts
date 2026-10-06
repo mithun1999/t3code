@@ -7,7 +7,7 @@
  */
 import * as Schema from "effect/Schema";
 
-import { NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { NonNegativeInt, PositiveInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ProjectEntryKind } from "./project.ts";
 
 const WORKSPACE_PATH_MAX_LENGTH = 1024;
@@ -80,6 +80,38 @@ export class WorkspaceEntryOperationError extends Schema.TaggedError<WorkspaceEn
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
+
+// Search view: replace
+
+export const WorkspaceReplaceInFilesInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  query: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(256)),
+  caseSensitive: Schema.Boolean,
+  wholeWord: Schema.Boolean,
+  useRegex: Schema.Boolean,
+  replacement: Schema.String.check(Schema.isMaxLength(10_000)),
+  /** The matches to replace, as the search reported them: 1-based line, start offset. */
+  files: Schema.Array(
+    Schema.Struct({
+      relativePath: WorkspaceRelativePath,
+      matches: Schema.Array(
+        Schema.Struct({ lineNumber: PositiveInt, start: NonNegativeInt }),
+      ).check(Schema.isMinLength(1)),
+    }),
+  ).check(Schema.isMinLength(1), Schema.isMaxLength(WORKSPACE_BATCH_MAX_PATHS)),
+});
+export type WorkspaceReplaceInFilesInput = typeof WorkspaceReplaceInFilesInput.Type;
+
+export const WorkspaceReplaceInFilesResult = Schema.Struct({
+  replacedMatches: NonNegativeInt,
+  changedFiles: NonNegativeInt,
+  /** Matches that changed on disk since the search, left alone. */
+  skippedMatches: NonNegativeInt,
+  failedFiles: Schema.Array(
+    Schema.Struct({ relativePath: Schema.String, message: TrimmedNonEmptyString }),
+  ),
+});
+export type WorkspaceReplaceInFilesResult = typeof WorkspaceReplaceInFilesResult.Type;
 
 // Disk changes
 

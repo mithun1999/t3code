@@ -146,6 +146,8 @@ interface RightPanelStoreState {
     ref: ScopedThreadRef,
     kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request">,
   ) => void;
+  /** Brings up the Files panel (its open tab, or a new one) for a side bar view. */
+  revealWorkbench: (ref: ScopedThreadRef) => void;
   openDevice: (ref: ScopedThreadRef, target: DeviceTabTarget, automatic?: boolean) => void;
   renameDevice: (ref: ScopedThreadRef, surfaceId: string, title: string) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
@@ -615,6 +617,8 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         });
         return opened;
       },
+      revealWorkbench: (ref) =>
+        set((state) => userAction(state, scopedThreadKey(ref), withSourceControl)),
       open: (ref, kind) =>
         set((state) =>
           userAction(state, scopedThreadKey(ref), (current) => {

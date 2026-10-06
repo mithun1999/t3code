@@ -2,7 +2,7 @@
 /**
  * WorkspaceEntryOperations - Effect service contract for the explorer's file
  * operations: create, rename and move, copy, and delete to the Trash or for
- * good.
+ * good, plus the Search view's replace.
  *
  * Every path stays inside the workspace root, symlinked folders included, and
  * neither the root itself nor anything inside `.git` can be touched. Failures
@@ -22,9 +22,12 @@ import {
   type WorkspaceEntryOperationFailure,
   type WorkspaceEntryResult,
   type WorkspaceMoveEntryInput,
+  type WorkspaceReplaceInFilesInput,
+  type WorkspaceReplaceInFilesResult,
   WorkspaceEntryOperationError,
 } from "@t3tools/contracts";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { buildSearchRegExp, replaceSelectedMatches } from "@t3tools/shared/searchReplace";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
@@ -70,6 +73,14 @@ export class WorkspaceEntryOperations extends Context.Service<
     readonly deleteEntries: (
       input: WorkspaceDeleteEntriesInput,
     ) => Effect.Effect<WorkspaceDeleteEntriesResult, WorkspaceEntryOperationError>;
+    /**
+     * Replace the Search view's matches. Each file is read, the chosen matches
+     * that still start where the search saw them are replaced, and the file is
+     * written back. One file failing doesn't stop the others.
+     */
+    readonly replaceInFiles: (
+      input: WorkspaceReplaceInFilesInput,
+    ) => Effect.Effect<WorkspaceReplaceInFilesResult, WorkspaceEntryOperationError>;
   }
 >()("t3/workspace/WorkspaceEntryOperations") {}
 
@@ -714,7 +725,90 @@ export const make = Effect.gen(function* () {
     return { trashed: !input.permanently };
   });
 
-  return WorkspaceEntryOperations.of({ createEntry, moveEntry, copyEntry, deleteEntries });
+  const replaceInFiles: WorkspaceEntryOperations["Service"]["replaceInFiles"] = Effect.fn(
+    "WorkspaceEntryOperations.replaceInFiles",
+  )(function* (input) {
+    const pattern = {
+      query: input.query,
+      caseSensitive: input.caseSensitive,
+      wholeWord: input.wholeWord,
+      useRegex: input.useRegex,
+    };
+    const firstPath = input.files[0]?.relativePath ?? "";
+    if (buildSearchRegExp(pattern) === null) {
+      return yield* entryError(
+        input.cwd,
+        firstPath,
+        "operation_failed",
+        "The search isn't a valid regular expression.",
+      );
+    }
+    const resolvedRoot = yield* resolveRoot(input.cwd, firstPath);
+    let replacedMatches = 0;
+    let changedFiles = 0;
+    let skippedMatches = 0;
+    const failedFiles: Array<{ relativePath: string; message: string }> = [];
+
+    for (const file of input.files) {
+      const outcome = yield* Effect.result(
+        Effect.gen(function* () {
+          const entry = yield* resolveEntry(input.cwd, resolvedRoot, file.relativePath, "source");
+          const context = { cwd: input.cwd, entry, verb: "replace in" } satisfies OperationContext;
+          const text = yield* attempt(() => NodeFSP.readFile(entry.absolutePath, "utf8")).pipe(
+            Effect.mapError((cause) =>
+              hasCode("ENOENT", "ENOTDIR")(cause)
+                ? entryError(
+                    input.cwd,
+                    entry.relativePath,
+                    "not_found",
+                    `'${entry.name}' no longer exists. It may have been moved or deleted.`,
+                  )
+                : operationFailed(context, cause),
+            ),
+          );
+          if (text.includes("\u0000")) {
+            return yield* entryError(
+              input.cwd,
+              entry.relativePath,
+              "operation_failed",
+              `'${entry.name}' is a binary file.`,
+            );
+          }
+          const selection = new Map<number, Set<number>>();
+          for (const match of file.matches) {
+            const starts = selection.get(match.lineNumber) ?? new Set<number>();
+            starts.add(match.start);
+            selection.set(match.lineNumber, starts);
+          }
+          const result = replaceSelectedMatches(text, pattern, input.replacement, selection);
+          if (result.replaced > 0) {
+            yield* attempt(() => NodeFSP.writeFile(entry.absolutePath, result.text, "utf8")).pipe(
+              Effect.mapError((cause) => operationFailed(context, cause)),
+            );
+          }
+          return result;
+        }),
+      );
+      if (outcome._tag === "Failure") {
+        failedFiles.push({ relativePath: file.relativePath, message: outcome.failure.message });
+        continue;
+      }
+      replacedMatches += outcome.success.replaced;
+      skippedMatches += outcome.success.skipped;
+      if (outcome.success.replaced > 0) changedFiles += 1;
+    }
+
+    if (changedFiles > 0) yield* refreshInBackground(resolvedRoot.root);
+    return { replacedMatches, changedFiles, skippedMatches, failedFiles };
+  });
+
+  return WorkspaceEntryOperations.of({
+    createEntry,
+    moveEntry,
+    copyEntry,
+    deleteEntries,
+    replaceInFiles,
+  });
 });
 
 export const layer = Layer.effect(WorkspaceEntryOperations, make);

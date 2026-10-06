@@ -189,6 +189,8 @@ import {
   WorkspaceCreateEntryInput,
   WorkspaceDeleteEntriesInput,
   WorkspaceDeleteEntriesResult,
+  WorkspaceReplaceInFilesInput,
+  WorkspaceReplaceInFilesResult,
   WorkspaceEntryOperationError,
   WorkspaceEntryResult,
   WorkspaceMoveEntryInput,
@@ -319,6 +321,7 @@ export const WS_METHODS = {
   workspaceMoveEntry: "workspace.moveEntry",
   workspaceCopyEntry: "workspace.copyEntry",
   workspaceDeleteEntries: "workspace.deleteEntries",
+  workspaceReplaceInFiles: "workspace.replaceInFiles",
   scmStatus: "scm.status",
   scmStage: "scm.stage",
   scmUnstage: "scm.unstage",
@@ -1024,6 +1027,12 @@ const WsWorkspaceDeleteEntriesRpc = Rpc.make(WS_METHODS.workspaceDeleteEntries, 
   error: Schema.Union([WorkspaceEntryOperationError, EnvironmentAuthorizationError]),
 });
 
+const WsWorkspaceReplaceInFilesRpc = Rpc.make(WS_METHODS.workspaceReplaceInFiles, {
+  payload: WorkspaceReplaceInFilesInput,
+  success: WorkspaceReplaceInFilesResult,
+  error: Schema.Union([WorkspaceEntryOperationError, EnvironmentAuthorizationError]),
+});
+
 const WsSubscribeWorkspaceChangesRpc = Rpc.make(WS_METHODS.subscribeWorkspaceChanges, {
   payload: WorkspaceWatchInput,
   success: WorkspaceChangeEvent,
@@ -1600,6 +1609,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsWorkspaceMoveEntryRpc,
   WsWorkspaceCopyEntryRpc,
   WsWorkspaceDeleteEntriesRpc,
+  WsWorkspaceReplaceInFilesRpc,
   WsSubscribeWorkspaceChangesRpc,
   WsScmStatusRpc,
   WsScmStageRpc,

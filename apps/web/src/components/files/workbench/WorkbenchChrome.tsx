@@ -1,4 +1,4 @@
-import { FilesIcon, GitBranchIcon } from "lucide-react";
+import { FilesIcon, GitBranchIcon, SearchIcon } from "lucide-react";
 import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
@@ -58,6 +58,7 @@ export function WorkbenchActivityBar(props: {
   changeCount: number;
   shortcutLabels?: {
     readonly explorer: string | null;
+    readonly search: string | null;
     readonly scm: string | null;
     readonly toggle: string | null;
   };
@@ -80,6 +81,15 @@ export function WorkbenchActivityBar(props: {
         onPress={() => props.onSelect("explorer")}
       >
         <FilesIcon className="size-4.5" />
+      </ActivityBarButton>
+      <ActivityBarButton
+        label="Search"
+        tooltip={withKey("Search", props.shortcutLabels?.search)}
+        hint={toggleHint ? `${toggleHint} hides or shows the side bar` : undefined}
+        active={props.sideBarVisible && props.view === "search"}
+        onPress={() => props.onSelect("search")}
+      >
+        <SearchIcon className="size-4.5" />
       </ActivityBarButton>
       <ActivityBarButton
         label="Source Control"

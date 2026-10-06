@@ -438,4 +438,105 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceEntryOperations", (
       }),
     );
   });
+
+  describe("replaceInFiles", () => {
+    const search = {
+      query: "foo",
+      caseSensitive: false,
+      wholeWord: false,
+      useRegex: false,
+    };
+
+    it.effect("replaces the chosen matches and keeps the rest", () =>
+      Effect.gen(function* () {
+        const operations = yield* WorkspaceEntryOperations.WorkspaceEntryOperations;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "src/a.ts", "foo foo\r\nkeep foo\n");
+        yield* writeTextFile(cwd, "b.md", "Foo\n");
+
+        const result = yield* operations.replaceInFiles({
+          cwd,
+          ...search,
+          replacement: "bar",
+          files: [
+            {
+              relativePath: "src/a.ts",
+              matches: [
+                { lineNumber: 1, start: 0 },
+                { lineNumber: 1, start: 4 },
+              ],
+            },
+            { relativePath: "b.md", matches: [{ lineNumber: 1, start: 0 }] },
+          ],
+        });
+
+        expect(result).toEqual({
+          replacedMatches: 3,
+          changedFiles: 2,
+          skippedMatches: 0,
+          failedFiles: [],
+        });
+        expect(yield* readText(cwd, "src/a.ts")).toBe("bar bar\r\nkeep foo\n");
+        expect(yield* readText(cwd, "b.md")).toBe("bar\n");
+      }),
+    );
+
+    it.effect("expands regex groups and skips matches that moved", () =>
+      Effect.gen(function* () {
+        const operations = yield* WorkspaceEntryOperations.WorkspaceEntryOperations;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "a.ts", "const one = 1;\n");
+
+        const result = yield* operations.replaceInFiles({
+          cwd,
+          query: "const (\\w+)",
+          caseSensitive: true,
+          wholeWord: false,
+          useRegex: true,
+          replacement: "let $1",
+          files: [
+            {
+              relativePath: "a.ts",
+              matches: [
+                { lineNumber: 1, start: 0 },
+                { lineNumber: 1, start: 3 },
+              ],
+            },
+          ],
+        });
+
+        expect(result.replacedMatches).toBe(1);
+        expect(result.skippedMatches).toBe(1);
+        expect(yield* readText(cwd, "a.ts")).toBe("let one = 1;\n");
+      }),
+    );
+
+    it.effect("reports files it can't touch and still replaces the others", () =>
+      Effect.gen(function* () {
+        const operations = yield* WorkspaceEntryOperations.WorkspaceEntryOperations;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "ok.ts", "foo\n");
+
+        const result = yield* operations.replaceInFiles({
+          cwd,
+          ...search,
+          replacement: "bar",
+          files: [
+            { relativePath: "../outside.ts", matches: [{ lineNumber: 1, start: 0 }] },
+            { relativePath: ".git/config", matches: [{ lineNumber: 1, start: 0 }] },
+            { relativePath: "gone.ts", matches: [{ lineNumber: 1, start: 0 }] },
+            { relativePath: "ok.ts", matches: [{ lineNumber: 1, start: 0 }] },
+          ],
+        });
+
+        expect(result.replacedMatches).toBe(1);
+        expect(result.failedFiles.map((file) => file.relativePath)).toEqual([
+          "../outside.ts",
+          ".git/config",
+          "gone.ts",
+        ]);
+        expect(yield* readText(cwd, "ok.ts")).toBe("bar\n");
+      }),
+    );
+  });
 });

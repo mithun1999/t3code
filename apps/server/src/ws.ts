@@ -3459,6 +3459,14 @@ const makeWsRpcLayer = (
               .pipe(Effect.ensuring(refreshGitStatus(input.cwd))),
             { "rpc.aggregate": "workspace" },
           ),
+        [WS_METHODS.workspaceReplaceInFiles]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceReplaceInFiles,
+            workspaceEntryOperations
+              .replaceInFiles(input)
+              .pipe(Effect.ensuring(refreshGitStatus(input.cwd))),
+            { "rpc.aggregate": "workspace" },
+          ),
         [WS_METHODS.subscribeWorkspaceChanges]: (input) =>
           observeRpcStream(
             WS_METHODS.subscribeWorkspaceChanges,

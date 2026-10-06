@@ -309,6 +309,7 @@ export function commandLabel(command: KeybindingCommand): string {
   if (command === "files.toggleSideBar") return "View: Toggle Files Side Bar";
   if (command === "files.showExplorer") return "View: Show Explorer";
   if (command === "files.showSourceControl") return "View: Show Source Control";
+  if (command === "files.showReplace") return "Search: Replace in Files";
   // Source Control replaced the diff panel; the command keeps its id.
   if (command === "diff.toggle") return "View: Toggle Source Control";
   const usageMetric = METRIC_OPTIONS.find((option) => option.command === command);

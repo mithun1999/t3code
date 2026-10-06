@@ -27,6 +27,7 @@ import type {
   ProjectSearchEntriesResult,
 } from "@t3tools/contracts";
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
+import { compileSearchPathFilter, isWholeWordRange } from "@t3tools/shared/searchReplace";
 
 // fff-node stays external to the CLI bundle because it dlopens a native
 // library. A static `import` of an external package is a hard error inside a
@@ -225,21 +226,6 @@ function mapMixedSearchResult(
   };
 }
 
-const WORD_CHARACTER = /[\p{Letter}\p{Mark}\p{Number}_]/u;
-
-function codePointAt(line: string, index: number): string | undefined {
-  const codePoint = line.codePointAt(index);
-  return codePoint === undefined ? undefined : String.fromCodePoint(codePoint);
-}
-
-function codePointBefore(line: string, index: number): string | undefined {
-  if (index <= 0) return undefined;
-  const previousCodeUnit = line.charCodeAt(index - 1);
-  const previousIndex =
-    previousCodeUnit >= 0xdc00 && previousCodeUnit <= 0xdfff ? index - 2 : index - 1;
-  return codePointAt(line, previousIndex);
-}
-
 function buildContentSearchQuery(input: Omit<ProjectSearchContentsInput, "cwd">): {
   readonly searchQuery: string;
   readonly regexMode: boolean;
@@ -264,33 +250,6 @@ function mapContentMatchRanges(
     start: toStringIndex(startByte),
     end: toStringIndex(endByte),
   }));
-}
-
-/**
- * Whole-word filtering happens after the grep rather than by wrapping the
- * pattern in boundary regex: consuming boundaries such as `(?:^|\W)` swallow
- * the separator between adjacent matches and widen the reported ranges, and
- * `\b` cannot match punctuation-edged queries at all. Matching VS Code, a
- * match edge is a word boundary when it touches the line edge, the
- * neighbouring character is not a word character, or the match's own edge
- * character is not a word character.
- */
-function isWholeWordRange(
-  line: string,
-  range: { readonly start: number; readonly end: number },
-): boolean {
-  if (range.end <= range.start) return false;
-  const isWord = (character: string | undefined) =>
-    character !== undefined && WORD_CHARACTER.test(character);
-  const leftIsBoundary =
-    range.start === 0 ||
-    !isWord(codePointBefore(line, range.start)) ||
-    !isWord(codePointAt(line, range.start));
-  const rightIsBoundary =
-    range.end >= line.length ||
-    !isWord(codePointAt(line, range.end)) ||
-    !isWord(codePointBefore(line, range.end));
-  return leftIsBoundary && rightIsBoundary;
 }
 
 function withDirectoryAncestors(entries: ReadonlyArray<ProjectEntry>): ProjectEntry[] {
@@ -507,12 +466,12 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
     "WorkspaceSearchIndex.searchContents",
   )(function* (input) {
     const { searchQuery, regexMode } = buildContentSearchQuery(input);
-    const deadline = performance.now() + CONTENT_SEARCH_TIME_BUDGET_MS;
+    const deadline = performance.now() + (input.timeBudgetMs ?? CONTENT_SEARCH_TIME_BUDGET_MS);
+    const maxMatchesPerFile = input.maxMatchesPerFile ?? CONTENT_SEARCH_MAX_MATCHES_PER_FILE;
+    const includePath = compileSearchPathFilter(input.includes, input.excludes);
     // Grep cursors advance by file, so whole-word post-filtering needs enough
     // raw candidates from the current file before moving to the next one.
-    const rawPageSize = input.wholeWord
-      ? Math.max(input.limit, CONTENT_SEARCH_MAX_MATCHES_PER_FILE)
-      : input.limit;
+    const rawPageSize = input.wholeWord ? Math.max(input.limit, maxMatchesPerFile) : input.limit;
     const matches: Array<ProjectSearchContentsResult["matches"][number]> = [];
     let nextCursor: GrepCursor | null = null;
     let regexFallbackError: string | undefined;
@@ -524,7 +483,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
           mode: regexMode ? "regex" : "plain",
           smartCase: !input.caseSensitive && !regexMode,
           // A single dense file must not consume the whole result page.
-          maxMatchesPerFile: Math.min(CONTENT_SEARCH_MAX_MATCHES_PER_FILE, rawPageSize),
+          maxMatchesPerFile: Math.min(maxMatchesPerFile, rawPageSize),
           pageSize: rawPageSize,
           cursor: nextCursor,
           timeBudgetMs: remainingTimeBudgetMs,
@@ -532,6 +491,11 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
       );
 
       for (const match of result.items) {
+        // Files to include and exclude filter after the grep, like whole words:
+        // VS Code's globs aren't part of the engine's query syntax.
+        if (includePath && !includePath(toPosixPath(match.relativePath))) continue;
+        // Whole-word filtering happens after the grep too: boundary regex
+        // would swallow the separator between adjacent matches.
         const matchRanges = mapContentMatchRanges(match.lineContent, match.matchRanges).filter(
           (range) => !input.wholeWord || isWholeWordRange(match.lineContent, range),
         );

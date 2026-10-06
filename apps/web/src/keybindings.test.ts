@@ -826,10 +826,18 @@ describe("Files panel view keys", () => {
       resolve({ key: "g", ctrlKey: true, shiftKey: true }, true),
       "files.showSourceControl",
     );
+    assert.strictEqual(
+      resolve({ key: "h", metaKey: true, shiftKey: true }, true),
+      "files.showReplace",
+    );
   });
 
   it("leaves the app's meaning of those keys everywhere else", () => {
     assert.strictEqual(resolve({ key: "b", metaKey: true }, false), "sidebar.toggle");
+    assert.strictEqual(
+      resolve({ key: "h", metaKey: true, shiftKey: true }, false),
+      "composer.host",
+    );
     assert.strictEqual(
       resolve({ key: "e", metaKey: true, shiftKey: true }, false),
       "composer.effort",

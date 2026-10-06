@@ -588,6 +588,29 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceEntries", (it) => {
       }),
     );
 
+    it.effect("filters by files to include and exclude", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDir({ prefix: "t3code-workspace-content-globs-" });
+        yield* writeTextFile(cwd, "src/app.ts", "needle\n");
+        yield* writeTextFile(cwd, "src/app.test.ts", "needle\n");
+        yield* writeTextFile(cwd, "docs/guide.md", "needle\n");
+
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        const result = yield* workspaceEntries.searchContents({
+          cwd,
+          query: "needle",
+          limit: 100,
+          caseSensitive: false,
+          wholeWord: false,
+          useRegex: false,
+          includes: "src",
+          excludes: "*.test.ts",
+        });
+
+        expect(result.matches.map((match) => match.path)).toEqual(["src/app.ts"]);
+      }),
+    );
+
     it.effect("honors case sensitivity and gitignore rules", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTempDir({ prefix: "t3code-workspace-content-ignore-", git: true });

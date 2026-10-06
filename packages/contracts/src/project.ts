@@ -7,7 +7,7 @@ import {
 } from "./baseSchemas.ts";
 
 const PROJECT_SEARCH_ENTRIES_MAX_LIMIT = 200;
-const PROJECT_SEARCH_CONTENTS_MAX_LIMIT = 500;
+const PROJECT_SEARCH_CONTENTS_MAX_LIMIT = 5000;
 const PROJECT_WRITE_FILE_PATH_MAX_LENGTH = 512;
 const PROJECT_READ_FILE_PATH_MAX_LENGTH = 512;
 
@@ -58,6 +58,12 @@ export const ProjectSearchContentsInput = Schema.Struct({
   caseSensitive: Schema.Boolean,
   wholeWord: Schema.Boolean,
   useRegex: Schema.Boolean,
+  // VS Code's "files to include" and "files to exclude": comma-separated globs.
+  includes: Schema.optional(Schema.String.check(Schema.isMaxLength(2048))),
+  excludes: Schema.optional(Schema.String.check(Schema.isMaxLength(2048))),
+  // The Search view asks for complete results; quick lookups keep the defaults.
+  timeBudgetMs: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(10_000))),
+  maxMatchesPerFile: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(1000))),
 });
 export type ProjectSearchContentsInput = typeof ProjectSearchContentsInput.Type;
 

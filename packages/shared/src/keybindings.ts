@@ -83,6 +83,7 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+b", command: "files.toggleSideBar", when: "filesPanelFocus" },
   { key: "mod+shift+e", command: "files.showExplorer", when: "filesPanelFocus" },
   { key: "ctrl+shift+g", command: "files.showSourceControl", when: "filesPanelFocus" },
+  { key: "mod+shift+h", command: "files.showReplace", when: "filesPanelFocus" },
   ...THREAD_JUMP_KEYBINDING_COMMANDS.map((command, index) => ({
     key: `mod+${index + 1}`,
     command,

@@ -93,10 +93,17 @@ import { recordRecentFile } from "./recentFiles";
 import { ScmDiffView } from "./workbench/ScmDiffView";
 import { scmChangeCount } from "./workbench/scmPresentation";
 import { type ScmCompare, SourceControlPanel } from "./workbench/SourceControlPanel";
+import { SearchPanel, type SearchViewRequest } from "./workbench/SearchPanel";
 import { useScmStatuses } from "./workbench/useScmStatuses";
 import { changeTouchesFile, useWorkspaceChanges } from "./workbench/useWorkspaceChanges";
 import type { FileSurfaceCompare } from "~/rightPanelStore";
-import { SIDE_BAR_VIEW_STORAGE_KEY, SideBarViewSchema } from "~/workbenchView";
+import { useRightPanelStore } from "~/rightPanelStore";
+import {
+  SIDE_BAR_VIEW_STORAGE_KEY,
+  SideBarViewSchema,
+  subscribeWorkbenchViewRequests,
+  type WorkbenchViewRequest,
+} from "~/workbenchView";
 import {
   SIDE_BAR_DEFAULT_WIDTH,
   SideBarResizeHandle,
@@ -1163,6 +1170,10 @@ export default function FilePreviewPanel({
       console.error(error);
     }
   };
+  // ⇧⌘F and ⇧⌘H reach the Search view through a request it acts on once.
+  const [searchRequest, setSearchRequest] = useState<SearchViewRequest | null>(null);
+  const requestSearch = (replace: boolean, query?: string) =>
+    setSearchRequest((current) => ({ id: (current?.id ?? 0) + 1, replace, query }));
   const selectSideBarView = (view: WorkbenchSideBarView) => {
     if (view === sideBarView && showSideBar && previewPath !== null) {
       setSideBarOpen(false);
@@ -1170,7 +1181,23 @@ export default function FilePreviewPanel({
     }
     setSideBarView(view);
     if (!explorerOpen) setSideBarOpen(true);
+    if (view === "search") requestSearch(false);
   };
+  const showRequestedView = (request: WorkbenchViewRequest) => {
+    setSideBarView(request.view);
+    if (!explorerOpen) setSideBarOpen(true);
+    if (request.view === "search") requestSearch(request.replace ?? false, request.query);
+    else focusWorkbenchSideBar(workbenchRef.current, request.view);
+  };
+  const showRequestedViewRef = useRef(showRequestedView);
+  showRequestedViewRef.current = showRequestedView;
+  useEffect(
+    () =>
+      workbenchAvailable
+        ? subscribeWorkbenchViewRequests((request) => showRequestedViewRef.current(request))
+        : undefined,
+    [workbenchAvailable],
+  );
 
   // Opened files feed ⌘P's "Recently opened" list, keyed by path within `cwd`.
   useEffect(() => {
@@ -1197,7 +1224,8 @@ export default function FilePreviewPanel({
       if (
         command !== "files.toggleSideBar" &&
         command !== "files.showExplorer" &&
-        command !== "files.showSourceControl"
+        command !== "files.showSourceControl" &&
+        command !== "files.showReplace"
       ) {
         return;
       }
@@ -1211,6 +1239,12 @@ export default function FilePreviewPanel({
         setSideBarOpen(!hiding);
         // Keep the keyboard in the panel so ⌘B brings the side bar back.
         if (hiding) focusWorkbenchEditor(root);
+        return;
+      }
+      if (command === "files.showReplace") {
+        setSideBarView("search");
+        if (!explorerOpen) setSideBarOpen(true);
+        requestSearch(true);
         return;
       }
       const view: WorkbenchSideBarView = command === "files.showExplorer" ? "explorer" : "scm";
@@ -1228,6 +1262,7 @@ export default function FilePreviewPanel({
     const options = { context: { filesPanelFocus: true } };
     return {
       explorer: shortcutLabelForCommand(keybindings, "files.showExplorer", options),
+      search: shortcutLabelForCommand(keybindings, "projectSearch.toggle", options),
       scm: shortcutLabelForCommand(keybindings, "files.showSourceControl", options),
       toggle: shortcutLabelForCommand(keybindings, "files.toggleSideBar", options),
     };
@@ -1519,7 +1554,19 @@ export default function FilePreviewPanel({
           // In a narrow panel the editor keeps most of the room.
           style={previewPath ? { width: `min(${sideBarWidth}px, 40%)` } : undefined}
         >
-          {sideBarView === "scm" ? (
+          {sideBarView === "search" ? (
+            <SearchPanel
+              key={`${environmentId}:${cwd}`}
+              environmentId={environmentId}
+              cwd={cwd}
+              request={searchRequest}
+              onOpenMatch={(path, lineNumber) =>
+                useRightPanelStore
+                  .getState()
+                  .openFile(threadRef, path, lineNumber, undefined, { preview: true })
+              }
+            />
+          ) : sideBarView === "scm" ? (
             <SourceControlPanel
               environmentId={environmentId}
               scm={scm}
