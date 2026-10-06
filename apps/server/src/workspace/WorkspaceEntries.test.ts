@@ -916,6 +916,27 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceEntries", (it) => {
       }),
     );
 
+    it.effect("lists every file, after the folders, when includeFiles is set", () =>
+      Effect.gen(function* () {
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir({ prefix: "t3code-workspace-browse-files-" });
+        yield* writeTextFile(cwd, "scripts/run.py", "print(1)\n");
+        yield* writeTextFile(cwd, "data.csv", "a,b\n");
+        yield* writeTextFile(cwd, ".env", "X=1\n");
+
+        const result = yield* workspaceEntries.browse({
+          partialPath: yield* appendSeparator(cwd),
+          includeFiles: true,
+        });
+        expect(result.entries).toEqual([
+          { name: "scripts", fullPath: path.join(cwd, "scripts"), kind: "directory" },
+          { name: ".env", fullPath: path.join(cwd, ".env"), kind: "file" },
+          { name: "data.csv", fullPath: path.join(cwd, "data.csv"), kind: "file" },
+        ]);
+      }),
+    );
+
     it.effect("shows dot directories in directory mode and hidden-prefix mode", () =>
       Effect.gen(function* () {
         const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;

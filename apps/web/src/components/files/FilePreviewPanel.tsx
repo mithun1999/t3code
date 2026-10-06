@@ -97,6 +97,7 @@ import { scmChangeCount } from "./workbench/scmPresentation";
 import { type ScmCompare, SourceControlPanel } from "./workbench/SourceControlPanel";
 import { SearchPanel, type SearchViewRequest } from "./workbench/SearchPanel";
 import { findMissingFileCandidates, missingFileLookupPath } from "./missingFileCandidates";
+import { HostFolderView } from "./HostFolderView";
 import { useScmStatuses } from "./workbench/useScmStatuses";
 import { changeTouchesFile, useWorkspaceChanges } from "./workbench/useWorkspaceChanges";
 import type { FileSurfaceCompare } from "~/rightPanelStore";
@@ -1520,6 +1521,18 @@ export default function FilePreviewPanel({
                   workspaceRoot={cwd}
                   title={relativePath}
                   workspaceMutationId={workspaceMutationId}
+                />
+              ) : relativePath && isHostFile && attachment === undefined && file.isNotFile ? (
+                <HostFolderView
+                  key={relativePath}
+                  environmentId={environmentId}
+                  folderPath={relativePath}
+                  theme={resolvedTheme}
+                  onOpenEntry={(path) =>
+                    useRightPanelStore
+                      .getState()
+                      .openFile(threadRef, path, undefined, undefined, { preview: true })
+                  }
                 />
               ) : relativePath && file.error && file.data === null ? (
                 missingLookupPath && (missingCandidates === null || onlyCandidate) ? (

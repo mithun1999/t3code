@@ -275,7 +275,7 @@ export const make = Effect.gen(function* () {
       const entries: Array<{
         readonly name: string;
         readonly fullPath: string;
-        readonly kind: "directory" | "workspaceFile";
+        readonly kind: "directory" | "workspaceFile" | "file";
       }> = [];
       for (const dirent of dirents) {
         if (!dirent.name.toLowerCase().startsWith(lowerPrefix)) {
@@ -300,14 +300,20 @@ export const make = Effect.gen(function* () {
             fullPath: path.join(parentPath, dirent.name),
             kind: "workspaceFile",
           });
+        } else if (input.includeFiles && (dirent.isFile() || dirent.isSymbolicLink())) {
+          entries.push({
+            name: dirent.name,
+            fullPath: path.join(parentPath, dirent.name),
+            kind: "file",
+          });
         }
       }
 
       return {
         parentPath,
-        // Directories first, then workspace files; alphabetical within each group.
+        // Directories first, then files; alphabetical within each group.
         entries: entries.toSorted((left, right) => {
-          if (left.kind !== right.kind) {
+          if ((left.kind === "directory") !== (right.kind === "directory")) {
             return left.kind === "directory" ? -1 : 1;
           }
           return left.name.localeCompare(right.name);

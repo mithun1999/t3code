@@ -8,10 +8,12 @@ export const FilesystemBrowseInput = Schema.Struct({
   cwd: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(FILESYSTEM_PATH_MAX_LENGTH))),
   /** When true, also list `.code-workspace` files alongside directories. */
   includeWorkspaceFiles: Schema.optional(Schema.Boolean),
+  /** When true, list every file too, as `file` entries (a folder outside the workspace). */
+  includeFiles: Schema.optional(Schema.Boolean),
 });
 export type FilesystemBrowseInput = typeof FilesystemBrowseInput.Type;
 
-export const FilesystemBrowseEntryKind = Schema.Literals(["directory", "workspaceFile"]);
+export const FilesystemBrowseEntryKind = Schema.Literals(["directory", "workspaceFile", "file"]);
 export type FilesystemBrowseEntryKind = typeof FilesystemBrowseEntryKind.Type;
 
 export const FilesystemBrowseEntry = Schema.Struct({

@@ -26,6 +26,11 @@ inside `popups/apps/popups-editor`. When a path isn't at the top of the
 workspace, T3 Code opens the workspace file that ends with it, or lists the
 files when there are several.
 
+A folder outside the workspace, such as a cache folder an agent mentions,
+opens as a list of its contents: select a file to read it (files outside the
+workspace are read-only), a folder to go into it, or **..** to go up. **Open
+in** at the top opens the folder in your editor or Finder.
+
 ## Explorer
 
 The explorer lists your workspace. In a multi-repo workspace each repository is
