@@ -62,6 +62,10 @@ import { FileBreadcrumbs } from "./FileBreadcrumbs";
 import { FileMarkdownPreview } from "./FileMarkdownPreview";
 import { isRootPath } from "./filePath";
 import {
+  type ProjectFileRoot,
+  projectFileRootsKey,
+} from "@t3tools/client-runtime/project-file-roots";
+import {
   type FileCommentAnnotationEntry,
   type FileCommentAnnotationGroup,
   type FileCommentLineAnnotation,
@@ -90,7 +94,6 @@ import {
   shouldShowFileExplorer,
 } from "./filePreviewMode";
 import { useFileSaveCoordinator } from "./useFileSaveCoordinator";
-import { buildRootLabels } from "./filePath";
 import { recordRecentFile } from "./recentFiles";
 import { ScmDiffView } from "./workbench/ScmDiffView";
 import { scmChangeCount } from "./workbench/scmPresentation";
@@ -132,8 +135,12 @@ interface FilePreviewPanelProps {
   availableEditors: ReadonlyArray<EditorId>;
   revealLine: number | null;
   revealRequestId: number;
-  // Multi-repo workspaces (#923): repo roots to list/group in the file tree.
-  repoRoots?: readonly string[] | undefined;
+  // Multi-root projects (#923): roots to list/group in the file tree.
+  roots?: readonly ProjectFileRoot[] | undefined;
+  // True while `roots` is still being resolved; the file tree waits for it.
+  rootsPending?: boolean | undefined;
+  // Re-resolves `roots` from their source when the user refreshes the tree.
+  onRefreshRoots?: (() => void) | undefined;
   // Owning root of the currently-open file. Reads/writes resolve against this
   // root (it may be a different repo than the anchor `cwd`). Null = anchor.
   fileRoot?: string | null | undefined;
@@ -991,7 +998,9 @@ export default function FilePreviewPanel({
   availableEditors,
   revealLine,
   revealRequestId,
-  repoRoots,
+  roots,
+  rootsPending,
+  onRefreshRoots,
   fileRoot,
   onOpenFile,
   onOpenFileDiff,
@@ -1039,7 +1048,8 @@ export default function FilePreviewPanel({
   const isDirectory =
     file.isNotFile &&
     (!isHostFile ||
-      (relativePath !== null && isRootPath([cwd, ...(repoRoots ?? [])], relativePath)));
+      (relativePath !== null &&
+        isRootPath([cwd, ...(roots?.map(({ root }) => root) ?? [])], relativePath)));
   // Everything preview-related keys off previewPath; a folder has no preview.
   const previewPath = isDirectory ? null : relativePath;
   const [explorerOpen, setExplorerOpen] = useState(initialExplorerOpen);
@@ -1113,14 +1123,21 @@ export default function FilePreviewPanel({
     SIDE_BAR_DEFAULT_WIDTH,
     Schema.Number,
   );
-  const multiRepo = repoRoots !== undefined && repoRoots.length > 1;
-  const scmRootsKey = !workbenchAvailable ? "" : multiRepo ? repoRoots.join("\0") : cwd;
+  const multiRepo = roots !== undefined && roots.length > 1;
+  const scmRootsKey = !workbenchAvailable
+    ? ""
+    : multiRepo
+      ? roots.map(({ root }) => root).join("\0")
+      : cwd;
   const scmRoots = useMemo(() => (scmRootsKey ? scmRootsKey.split("\0") : []), [scmRootsKey]);
   const scm = useScmStatuses(environmentId, scmRoots);
   const scmChanges = scm.repos.reduce((count, repo) => count + scmChangeCount(repo.status), 0);
   const repoLabels = useMemo(
-    () => (multiRepo ? buildRootLabels(scmRoots) : new Map([[cwd, projectName]])),
-    [cwd, multiRepo, projectName, scmRoots],
+    () =>
+      multiRepo
+        ? new Map(roots.map(({ root, label }) => [root, label]))
+        : new Map([[cwd, projectName]]),
+    [cwd, multiRepo, projectName, roots],
   );
   /** A file surface names its repo only when the workspace has several, or it isn't `cwd`. */
   const surfaceRootFor = (repoRoot: string) =>
@@ -1404,7 +1421,7 @@ export default function FilePreviewPanel({
                       onOpenFile={onOpenFile}
                       projectName={projectName}
                       relativePath={relativePath}
-                      repoRoots={repoRoots}
+                      roots={roots}
                       root={fileRoot ?? undefined}
                       workspaceMutationId={workspaceMutationId}
                     />
@@ -1671,17 +1688,20 @@ export default function FilePreviewPanel({
               }
               onOpenFile={(repoRoot, path) => onOpenFile(path, surfaceRootFor(repoRoot))}
             />
-          ) : (
+          ) : rootsPending ? null : (
+            // The tree caches folders by label, so a root that changes path under
+            // the same label must remount it rather than show the old contents.
             <FileBrowserPanel
-              key={`${environmentId}:${cwd}`}
+              key={`${environmentId}:${cwd}:${projectFileRootsKey(roots)}`}
               environmentId={environmentId}
               cwd={cwd}
               projectName={projectName}
               selectedPath={compare ? null : relativePath}
               selectedRoot={fileRoot ?? undefined}
               selectedPathRevealId={revealRequestId}
-              repoRoots={repoRoots}
+              roots={roots}
               onOpenFile={onOpenFile}
+              {...(onRefreshRoots ? { onRefreshRoots } : {})}
               workspaceMutationId={workspaceMutationId}
               scm={scm}
               onEntryMoved={(from, to) =>

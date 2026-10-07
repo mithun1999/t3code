@@ -26,7 +26,12 @@ import { readLocalApi } from "~/localApi";
 import { T3_PIERRE_ICONS } from "~/pierre-icons";
 import { PIERRE_TREE_UNSAFE_CSS, pierreTreeStyle } from "~/pierre-tree-theme";
 
-import { buildRootLabels, isRootPath, labelForRoot } from "./filePath";
+import { fileTreeEntryTarget, isRootPath, rootGroupFolder } from "./filePath";
+import {
+  labelForRoot,
+  type ProjectFileRoot,
+  projectFileRootsKey,
+} from "@t3tools/client-runtime/project-file-roots";
 import { createFileTreeDragMentionController } from "./fileTreeDragMention";
 import { areAllDirectoriesExpanded, setAllDirectoriesExpanded } from "./fileTreeExpansion";
 import { buildFileTreePathUpdates } from "./fileTreePathReconciliation";
@@ -65,15 +70,18 @@ interface FileBrowserPanelProps {
   selectedRoot?: string | undefined;
   /** Bumped when the same path should be revealed again (e.g. re-opened from search). */
   selectedPathRevealId: number;
-  // Multi-repo workspaces (#923): when set, list the union of these repo roots
-  // and group the tree by repo. Omitted/single-entry keeps single-root behavior.
-  repoRoots?: readonly string[] | undefined;
+  // Multi-root projects (#923): when set, list the union of these roots (repos,
+  // or the folders a `.code-workspace` lists) and group the tree by root.
+  // Omitted/single-entry keeps single-root behavior.
+  roots?: readonly ProjectFileRoot[] | undefined;
   onOpenFile: (
     relativePath: string,
     root?: string,
     options?: { readonly preview?: boolean },
   ) => void;
   onRefreshSelectedFile?: () => void;
+  /** Re-resolves `roots`, so a refresh also picks up a changed root list. */
+  onRefreshRoots?: () => void;
   workspaceMutationId: string | null;
   /** Git status per repo, for VS Code-style colours and badges on changed files. */
   scm?: ScmStatuses | undefined;
@@ -185,9 +193,10 @@ export default function FileBrowserPanel({
   selectedPath: selectedRelativePath,
   selectedRoot,
   selectedPathRevealId,
-  repoRoots,
+  roots,
   onOpenFile,
   onRefreshSelectedFile,
+  onRefreshRoots,
   workspaceMutationId,
   scm,
   onEntryMoved,
@@ -198,18 +207,20 @@ export default function FileBrowserPanel({
   // Multi-repo workspaces (#923): each repo is a top-level node named by its
   // label, and every tree path below it is prefixed with that label so
   // same-named files across repos don't collide.
-  const multiRepoRootsKey = repoRoots && repoRoots.length > 1 ? repoRoots.join("\0") : "";
+  const multiRootsKey = roots && roots.length > 1 ? projectFileRootsKey(roots) : "";
   const { rootLabels, directoryRoots, searchRoots } = useMemo(() => {
-    if (!multiRepoRootsKey)
+    if (!multiRootsKey)
       return { rootLabels: null, directoryRoots: undefined, searchRoots: undefined };
-    const roots = multiRepoRootsKey.split("\0");
-    const rootLabels = buildRootLabels(roots);
+    const directoryRoots = multiRootsKey.split("\0\0").map((pair) => {
+      const [label = "", root = ""] = pair.split("\0");
+      return { root, label };
+    });
     return {
-      rootLabels,
-      directoryRoots: roots.map((root) => ({ root, label: rootLabels.get(root) ?? root })),
-      searchRoots: roots,
+      rootLabels: new Map(directoryRoots.map(({ root, label }) => [root, label])),
+      directoryRoots,
+      searchRoots: directoryRoots.map(({ root }) => root),
     };
-  }, [multiRepoRootsKey]);
+  }, [multiRootsKey]);
   // Tree paths sit under their repo's label, so an open from outside the tree
   // (a chat link, the file picker) maps onto that key to be found and revealed.
   // A repo root linked by its absolute path selects that repo's top-level node.
@@ -255,10 +266,14 @@ export default function FileBrowserPanel({
     if (query.trim() && !pathSearch.isPending) {
       for (const searchEntry of pathSearch.entries) {
         let entry = searchEntry;
+        // Segments above a root's own node only group roots (`dupe-a` over
+        // `dupe-a/docs`); they don't belong to this root, so they get none.
+        let rootDepth = 0;
         if (rootLabels) {
           const label = searchEntry.root ? labelForRoot(rootLabels, searchEntry.root) : undefined;
           if (label === undefined) continue;
           entry = { ...searchEntry, path: `${label}/${searchEntry.path}` };
+          rootDepth = label.split("/").length;
         }
         if (!result.has(entry.path)) result.set(entry.path, entry);
         const segments = entry.path.split("/");
@@ -268,7 +283,7 @@ export default function FileBrowserPanel({
             result.set(path, {
               path,
               kind: "directory",
-              ...(entry.root ? { root: entry.root } : {}),
+              ...(entry.root && index >= rootDepth ? { root: entry.root } : {}),
             });
         }
       }
@@ -285,10 +300,15 @@ export default function FileBrowserPanel({
     const entryInfo = new Map<string, TreeEntryInfo>();
     for (const entry of entries) {
       const label = rootLabels && entry.root ? labelForRoot(rootLabels, entry.root) : undefined;
+      // A root's own node is the root itself, so its path within the root is "".
       const relativePath =
-        label !== undefined && entry.path.startsWith(`${label}/`)
-          ? entry.path.slice(label.length + 1)
-          : entry.path;
+        label === undefined
+          ? entry.path
+          : entry.path === label
+            ? ""
+            : entry.path.startsWith(`${label}/`)
+              ? entry.path.slice(label.length + 1)
+              : entry.path;
       entryKinds.set(entry.path, entry.kind);
       entryInfo.set(entry.path, {
         relativePath,
@@ -301,6 +321,28 @@ export default function FileBrowserPanel({
   }, [entries, rootLabels]);
   const entryKindsRef = useRef<ReadonlyMap<string, ProjectEntry["kind"]>>(entryKinds);
   const entryInfoRef = useRef<ReadonlyMap<string, TreeEntryInfo>>(entryInfo);
+  // What a row's right-click actions and drag mention act on: its real file,
+  // resolved through its root rather than the label its tree path starts with.
+  // A row that only groups roots acts on the folder they sit in, or on nothing
+  // when they don't share one.
+  const entryTarget = (treePath: string) => {
+    const groupFolder = directoryRoots && rootGroupFolder(directoryRoots, treePath);
+    if (groupFolder === null) return null;
+    const info =
+      groupFolder === undefined
+        ? entryInfoRef.current.get(treePath)
+        : { root: groupFolder, relativePath: "" };
+    return fileTreeEntryTarget({
+      treePath,
+      cwd,
+      root: info?.root,
+      relativePath: info?.relativePath,
+    });
+  };
+  const entryTargetRef = useRef(entryTarget);
+  useEffect(() => {
+    entryTargetRef.current = entryTarget;
+  });
   const previousTreePathsRef = useRef<readonly string[] | null>(null);
   const syncingSelectionRef = useRef(false);
   const treeSelectionPathRef = useRef<string | null>(null);
@@ -342,7 +384,7 @@ export default function FileBrowserPanel({
       const parent = parentTreePath(path);
       if (parent || !labelSources) return parent;
     }
-    return labelSources?.find((source) => source.root === repoRoots?.[0])?.label ?? "";
+    return labelSources?.find((source) => source.root === roots?.[0]?.root)?.label ?? "";
   };
 
   /** VS Code's inline "New File…" row: an empty name to type into. */
@@ -570,17 +612,33 @@ export default function FileBrowserPanel({
     const rooted = resolvePath(treePath);
     const isRepoNode = rooted !== null && rooted.relativePath === "";
     const isFolder = item.kind === "directory";
-    const mention = serializeComposerFileLink(rooted?.relativePath || treePath);
+    // A row's mention and file actions go through its real root; a row that
+    // only groups roots acts on the folder they share, if any.
+    const target = entryTarget(treePath);
     const pointer = contextMenuPointerRef.current;
     const pointerIsFresh = pointer !== null && performance.now() - pointer.at < 1000;
     const anchorRect = context.anchorElement.getBoundingClientRect();
     const position = pointerIsFresh
       ? { x: pointer.x, y: pointer.y }
       : { x: anchorRect.left, y: anchorRect.bottom };
+    if (!target) {
+      // A group row whose folders don't share one parent has nothing to act on;
+      // say so rather than leave the right-click looking broken.
+      try {
+        await api.contextMenu.show(
+          [{ id: "no-folder", label: "No single folder for this group", disabled: true }],
+          position,
+        );
+      } finally {
+        context.close();
+      }
+      return;
+    }
+    const mention = serializeComposerFileLink(target.mentionPath);
     const fileTarget = {
       environmentId,
-      filePath: rooted?.relativePath || treePath,
-      workspaceRoot: rooted?.root ?? cwd,
+      filePath: target.filePath,
+      workspaceRoot: target.workspaceRoot,
     };
     const fileMenuItems = isRepoNode ? [] : fileContextMenu.buildItems(fileTarget);
     const newEntryDirectory = isFolder ? treePath : parentTreePath(treePath);
@@ -686,6 +744,7 @@ export default function FileBrowserPanel({
     () =>
       createFileTreeDragMentionController({
         deselect: (path) => treeModelRef.current?.getItem(path)?.deselect(),
+        mentionPath: (path) => entryTargetRef.current(path)?.mentionPath ?? null,
       }),
     [],
   );
@@ -846,6 +905,7 @@ export default function FileBrowserPanel({
     refresh();
     if (query.trim()) pathSearch.refresh();
     onRefreshSelectedFile?.();
+    onRefreshRoots?.();
   };
   useWorkspaceMutationRefresh({
     mutationId: workspaceMutationId,
@@ -970,7 +1030,8 @@ export default function FileBrowserPanel({
   // not depend on running after the tree's own dragstart handler; the drag
   // data store is writable for every dragstart listener in the dispatch.
   // The capture phase runs before the tree's own dragstart handler selects
-  // the dragged row, so the drag flag is up before that selection emits.
+  // the dragged row, so the drag flag is up before that selection emits, and
+  // a drag of rows with nothing to mention is cancelled before the tree starts it.
   const panelRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     treeModelRef.current = model;
