@@ -275,7 +275,13 @@ export function useNewThreadHandler() {
           // flag protects.
           const storedDraft = getComposerDraft(emptyStoredDraftThread.draftId);
           const storedDraftHasExplicitModelPick = hasExplicitComposerModelSelection(storedDraft);
-          if (!storedDraftHasExplicitModelPick) {
+          // A pick stands while its draft is on screen. Brought back by a new-thread
+          // request, an empty draft takes the project's default model instead: the
+          // pick belonged to an earlier visit, the default is a deliberate setting.
+          const keepExplicitModelPick =
+            storedDraftHasExplicitModelPick &&
+            (isDraftAlreadyOpen || projectDefaultModelSelection == null);
+          if (!keepExplicitModelPick) {
             applyStickyState(emptyStoredDraftThread.draftId);
             const modelSelectionOverride = resolveModelSelectionOverride(
               emptyStoredDraftThread.draftId,

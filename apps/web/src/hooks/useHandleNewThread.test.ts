@@ -7,7 +7,7 @@ const testState = vi.hoisted(() => {
   let targetSettings = {
     defaultThreadEnvMode: "local" as "local" | "worktree",
     newWorktreesStartFromOrigin: false,
-    defaultModelSelection: null,
+    defaultModelSelection: null as { instanceId: string; model: string } | null,
     defaultRuntimeMode: "full-access" as RuntimeMode,
   };
   let storedDraft: {
@@ -37,6 +37,8 @@ const testState = vi.hoisted(() => {
   };
 
   return {
+    /** Whether the reused draft's model was picked by hand on an earlier visit. */
+    explicitModelPick: false,
     completeProjectFileRead: (value: null) => completeProjectFileRead(value),
     draftStore,
     get projectFileRead() {
@@ -61,6 +63,7 @@ const testState = vi.hoisted(() => {
       };
       router.state.location.href = "/";
       router.navigate.mockClear();
+      draftStore.setModelSelection.mockClear();
       draftStore.setDraftThreadContext.mockClear();
       draftStore.setLogicalProjectDraftThreadId.mockClear();
       projectFileRead = new Promise<null>((resolve) => {
@@ -140,8 +143,9 @@ vi.mock("../composerDraftStore", () => {
 });
 vi.mock("../lib/chatThreadActions", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/chatThreadActions")>()),
-  hasExplicitComposerModelSelection: () => false,
-  resolveNewThreadModelSelectionOverride: () => null,
+  hasExplicitComposerModelSelection: () => testState.explicitModelPick,
+  resolveNewThreadModelSelectionOverride: (input: { projectDefaultSelection: unknown }) =>
+    input.projectDefaultSelection,
 }));
 vi.mock("../lib/t3ProjectFileDefaults", () => ({
   readT3ProjectFile: () => testState.projectFileRead,
@@ -286,4 +290,42 @@ describe.each([
       );
     },
   );
+});
+
+describe("useNewThreadHandler model for a reused empty draft", () => {
+  const reusableDraft = {
+    draftId: "draft-existing",
+    environmentId: "environment-ssh",
+    promotedTo: null,
+    threadId: "thread-existing",
+  };
+  const projectRef = { environmentId: "environment-ssh", projectId: "project-remote" } as never;
+  const workModel = { instanceId: "claude-work", model: "claude-opus-5-5" };
+
+  it("takes the project's default model over a pick from an earlier visit", async () => {
+    testState.reset(reusableDraft);
+    testState.targetSettings.defaultModelSelection = workModel;
+    testState.explicitModelPick = true;
+    const pendingOpen = useNewThreadHandler()(projectRef);
+    testState.completeProjectFileRead(null);
+    await pendingOpen;
+    testState.explicitModelPick = false;
+
+    expect(testState.draftStore.setModelSelection).toHaveBeenCalledWith(
+      reusableDraft.draftId,
+      workModel,
+      { replaceOptions: true },
+    );
+  });
+
+  it("keeps the earlier pick when the project has no default model", async () => {
+    testState.reset(reusableDraft);
+    testState.explicitModelPick = true;
+    const pendingOpen = useNewThreadHandler()(projectRef);
+    testState.completeProjectFileRead(null);
+    await pendingOpen;
+    testState.explicitModelPick = false;
+
+    expect(testState.draftStore.setModelSelection).not.toHaveBeenCalled();
+  });
 });
