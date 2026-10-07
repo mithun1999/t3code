@@ -7,7 +7,7 @@ import {
   previewReplacement,
   replaceSelectedMatches,
   type SearchPattern,
-} from "./searchReplace";
+} from "./searchReplace.ts";
 
 const pattern = (query: string, options: Partial<SearchPattern> = {}): SearchPattern => ({
   query,
