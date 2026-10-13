@@ -264,6 +264,9 @@ export function planSidebarThreadDrop(input: {
   readonly activeOrder: readonly string[];
   readonly activeKeysById: ReadonlyMap<string, string | null | undefined>;
   readonly activeReorderableKeys?: ReadonlySet<string>;
+  /** The active list sorts itself by recent message: a drop there only
+      changes the thread's section and writes no order keys. */
+  readonly activeOrderFixed?: boolean;
 }): SidebarThreadDropPlan {
   const {
     activeKey,
@@ -284,6 +287,17 @@ export function planSidebarThreadDrop(input: {
   switch (target.section) {
     case "active": {
       const order = target.activeOrder;
+      if (input.activeOrderFixed === true) {
+        if (activeSection === "active") return { kind: "none" };
+        return {
+          kind: "move-active",
+          order,
+          assignments: [],
+          unpin: activePinned,
+          unsettle: activeSettled,
+          unsnooze: activeSection === "snoozed",
+        };
+      }
       if (
         activeSection === "active" &&
         order.length === activeOrder.length &&
@@ -896,6 +910,7 @@ function firstValidTimestamp(
 }
 
 export { sortActiveThreadsByOrderKey as sortThreadsForSidebar } from "@t3tools/client-runtime/state/thread-sort";
+export { sortActiveThreadsByRecentMessage as sortThreadsForSidebarByRecentMessage } from "@t3tools/client-runtime/state/thread-sort";
 
 // Pinned-reorder key math and the keyed sort live in client-runtime
 // (state/thread-sort) so web and mobile compute identical pinned orders.

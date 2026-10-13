@@ -372,6 +372,37 @@ export function sortActiveThreadsByOrderKey<
   });
 }
 
+/** The "Most recent message" active list: the thread you last wrote in
+    leads. New threads count from creation and reopened ones from
+    unsettledAt, so both still surface at the top; saved drag keys are
+    ignored. A reply or a background turn never moves a row. */
+export function sortActiveThreadsByRecentMessage<
+  T extends {
+    readonly id: string;
+    readonly createdAt: string;
+    readonly unsettledAt?: string | null | undefined;
+    readonly latestUserMessageAt?: string | null | undefined;
+    readonly environmentId?: string | undefined;
+  },
+>(threads: readonly T[]): T[] {
+  if (threads.length < 2) return [...threads];
+  const timestamps = new Map(
+    threads.map((thread) => [
+      thread,
+      Math.max(
+        activeThreadAnchorTimestampMs(thread),
+        toSortableTimestamp(thread.latestUserMessageAt ?? undefined) ?? 0,
+      ),
+    ]),
+  );
+  return [...threads].sort(
+    (left, right) =>
+      timestamps.get(right)! - timestamps.get(left)! ||
+      left.id.localeCompare(right.id) ||
+      (left.environmentId ?? "").localeCompare(right.environmentId ?? ""),
+  );
+}
+
 /**
  * planPinnedReorder specialized for mobile's Move up / Move down menu
  * actions: swap the moved thread with its displayed neighbor. Null when the

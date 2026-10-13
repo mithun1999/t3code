@@ -188,6 +188,7 @@ import {
   sortLogicalProjectsForSidebar,
   sortPinnedThreadsForSidebar,
   sortThreadsForSidebar,
+  sortThreadsForSidebarByRecentMessage,
   useRetainedValue,
   useSidebarRowSubscriptionLease,
   useThreadJumpHintVisibility,
@@ -2209,6 +2210,9 @@ export default function Sidebar() {
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
+  const activeOrderFixed = useClientSettings(
+    (s) => s.sidebarActiveThreadOrder === "recent_message",
+  );
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
@@ -2661,7 +2665,9 @@ export default function Sidebar() {
     // sort, or mixed-version fleets would render different pinned orders on
     // web and mobile from the same data.
     const sortedPinned = sortPinnedThreadsForSidebar(pinned);
-    const sortedActive = sortThreadsForSidebar(active);
+    const sortedActive = activeOrderFixed
+      ? sortThreadsForSidebarByRecentMessage(active)
+      : sortThreadsForSidebar(active);
     return {
       pinnedThreads:
         optimisticDrop?.section !== "pinned" || optimisticDrop.order === null
@@ -2690,7 +2696,15 @@ export default function Sidebar() {
       settledThreads: sortSettledThreads(settled),
       snoozeNow: preciseNow,
     };
-  }, [nowMinute, optimisticDrop, scopedProjectKeys, serverConfigs, snoozeWakeTick, threads]);
+  }, [
+    activeOrderFixed,
+    nowMinute,
+    optimisticDrop,
+    scopedProjectKeys,
+    serverConfigs,
+    snoozeWakeTick,
+    threads,
+  ]);
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
@@ -3585,6 +3599,7 @@ export default function Sidebar() {
             activeOrder: activeKeys,
             activeKeysById,
             activeReorderableKeys: activeReorderableThreadKeys,
+            activeOrderFixed,
           }).kind !== "none"
         );
       },
@@ -3595,6 +3610,7 @@ export default function Sidebar() {
     );
   }, [
     activeKeysById,
+    activeOrderFixed,
     pinnedKeysById,
     serverConfigs,
     activeKeys,
@@ -3633,6 +3649,7 @@ export default function Sidebar() {
         activeOrder: activeKeys,
         activeKeysById,
         activeReorderableKeys: activeReorderableThreadKeys,
+        activeOrderFixed,
       });
       if (plan.kind === "none") return;
       if (plan.kind === "settle" && settlingThreadKeysRef.current.has(activeKey)) return;
@@ -3654,7 +3671,11 @@ export default function Sidebar() {
           plan.kind === "pin" ||
           plan.kind === "settle" ||
           (plan.kind === "move-active" && plan.unsnooze),
-        order: plan.kind === "settle" ? null : plan.order,
+        // A self-sorting Active list places the row by its own timestamps.
+        order:
+          plan.kind === "settle" || (plan.kind === "move-active" && activeOrderFixed)
+            ? null
+            : plan.order,
         keysAtDrop: target.section === "active" ? activeKeysById : pinnedKeysById,
         assignedKeys: new Map(assignments.map(({ id, orderKey }) => [id, orderKey])),
       };
@@ -3749,6 +3770,7 @@ export default function Sidebar() {
     },
     [
       activeKeysById,
+      activeOrderFixed,
       pinnedKeysById,
       serverConfigs,
       activeKeys,

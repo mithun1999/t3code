@@ -9,6 +9,7 @@ import {
   planPinnedReorder,
   resolveSettledThreadTimestamp,
   sortActiveThreadsByOrderKey,
+  sortActiveThreadsByRecentMessage,
   sortPinnedThreadsByOrderKey,
   sortSettledThreads,
   sortThreads,
@@ -385,6 +386,57 @@ describe("generateSpreadPinOrderKeys", () => {
       }
     },
   );
+});
+
+describe("sortActiveThreadsByRecentMessage", () => {
+  it("leads with the thread you last wrote in and ignores saved drag keys", () => {
+    const sorted = sortActiveThreadsByRecentMessage([
+      {
+        id: "arranged-first",
+        createdAt: "2026-03-09T09:00:00.000Z",
+        latestUserMessageAt: "2026-03-09T09:05:00.000Z",
+        activeOrderKey: "a",
+      },
+      {
+        id: "busy",
+        createdAt: "2026-03-01T09:00:00.000Z",
+        latestUserMessageAt: "2026-03-09T14:00:00.000Z",
+        activeOrderKey: "t",
+      },
+      {
+        id: "new",
+        createdAt: "2026-03-09T13:00:00.000Z",
+        latestUserMessageAt: null,
+      },
+      {
+        id: "reopened",
+        createdAt: "2026-03-01T09:00:00.000Z",
+        latestUserMessageAt: "2026-03-02T09:00:00.000Z",
+        unsettledAt: "2026-03-09T12:00:00.000Z",
+      },
+    ]);
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      "busy",
+      "new",
+      "reopened",
+      "arranged-first",
+    ]);
+  });
+
+  it("sinks malformed timestamps and breaks ties by thread then environment", () => {
+    const sorted = sortActiveThreadsByRecentMessage([
+      { id: "broken", createdAt: "not a date", latestUserMessageAt: "also not" },
+      { id: "thread-b", environmentId: "env-a", createdAt: "2026-03-09T10:00:00.000Z" },
+      { id: "thread-a", environmentId: "env-b", createdAt: "2026-03-09T10:00:00.000Z" },
+      { id: "thread-a", environmentId: "env-a", createdAt: "2026-03-09T10:00:00.000Z" },
+    ]);
+    expect(sorted.map((thread) => `${thread.id}:${thread.environmentId ?? ""}`)).toEqual([
+      "thread-a:env-a",
+      "thread-a:env-b",
+      "thread-b:env-a",
+      "broken:",
+    ]);
+  });
 });
 
 describe("sortActiveThreadsByOrderKey", () => {

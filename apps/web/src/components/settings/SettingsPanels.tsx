@@ -199,6 +199,11 @@ const TIMESTAMP_FORMAT_LABELS = {
   "24-hour": "24-hour",
 } as const;
 
+const ACTIVE_THREAD_ORDER_LABELS = {
+  recent_message: "Most recent message",
+  manual: "Manual",
+} as const;
+
 const CHAT_WIDTH_LABELS: Record<ChatWidth, string> = {
   comfortable: "Comfortable",
   wide: "Wide",
@@ -569,6 +574,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode
         ? ["Project Grouping"]
         : []),
+      ...(settings.sidebarActiveThreadOrder !== DEFAULT_UNIFIED_SETTINGS.sidebarActiveThreadOrder
+        ? ["Thread order"]
+        : []),
       ...(settings.sidebarAutoSettleAfterDays !==
       DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
         ? ["Auto-settle inactive threads"]
@@ -692,6 +700,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarAutoSettleAfterDays,
       settings.sidebarAutoSettleOnMerge,
       settings.sidebarProjectGroupingMode,
+      settings.sidebarActiveThreadOrder,
       settings.sidebarThreadPreviewCount,
       settings.showSkillsInSlashMenu,
       settings.timestampFormat,
@@ -790,6 +799,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       panelAnimationDurationMs: DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs,
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
+      sidebarActiveThreadOrder: DEFAULT_UNIFIED_SETTINGS.sidebarActiveThreadOrder,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
       responseStreamingMode: DEFAULT_UNIFIED_SETTINGS.responseStreamingMode,
@@ -2275,6 +2285,52 @@ export function GeneralSettingsPanel() {
               }}
               aria-label="Project grouping"
             />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("active-thread-order")}
+          description={
+            settings.sidebarActiveThreadOrder === "recent_message"
+              ? "Active threads you last wrote in come first."
+              : "Active threads stay in creation order; drag to arrange them."
+          }
+          resetAction={
+            settings.sidebarActiveThreadOrder !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarActiveThreadOrder ? (
+              <SettingResetButton
+                label="thread order"
+                onClick={() =>
+                  updateSettings({
+                    sidebarActiveThreadOrder: DEFAULT_UNIFIED_SETTINGS.sidebarActiveThreadOrder,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.sidebarActiveThreadOrder}
+              onValueChange={(value) => {
+                if (value === "recent_message" || value === "manual") {
+                  updateSettings({ sidebarActiveThreadOrder: value });
+                }
+              }}
+            >
+              <SelectTrigger size="sm" className="w-full sm:w-48" aria-label="Thread order">
+                <SelectValue>
+                  {ACTIVE_THREAD_ORDER_LABELS[settings.sidebarActiveThreadOrder]}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="recent_message">
+                  {ACTIVE_THREAD_ORDER_LABELS.recent_message}
+                </SelectItem>
+                <SelectItem hideIndicator value="manual">
+                  {ACTIVE_THREAD_ORDER_LABELS.manual}
+                </SelectItem>
+              </SelectPopup>
+            </Select>
           }
         />
 

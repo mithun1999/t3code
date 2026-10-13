@@ -274,6 +274,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["combine matching repositories environments sidebar"],
   },
   {
+    id: "active-thread-order",
+    title: "Thread order",
+    to: "/settings/general",
+    searchTerms: ["sidebar sort recent message latest activity manual drag arrange"],
+  },
+  {
     id: "auto-settle-inactive-threads",
     title: "Auto-settle inactive threads",
     to: "/settings/general",

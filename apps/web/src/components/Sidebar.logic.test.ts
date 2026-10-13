@@ -1360,6 +1360,32 @@ describe("planSidebarThreadDrop", () => {
     expect(key > "f" && key < "m").toBe(true);
   });
 
+  it("only changes the section when Active sorts by recent message", () => {
+    expect(
+      plan({
+        activeKey: "a1",
+        activeSection: "active",
+        activeOrderFixed: true,
+        target: { section: "active", pinnedOrder: [], activeOrder: ["a2", "a1", "a3"] },
+      }),
+    ).toEqual({ kind: "none" });
+    expect(
+      plan({
+        activeKey: "p2",
+        activeSection: "pinned",
+        activeOrderFixed: true,
+        target: { section: "active", pinnedOrder: [], activeOrder: ["a1", "p2", "a2", "a3"] },
+      }),
+    ).toEqual({
+      kind: "move-active",
+      order: ["a1", "p2", "a2", "a3"],
+      assignments: [],
+      unpin: true,
+      unsettle: false,
+      unsnooze: false,
+    });
+  });
+
   it.each([
     { state: "pinned", activePinned: true, activeSettled: false },
     { state: "settled", activePinned: false, activeSettled: true },

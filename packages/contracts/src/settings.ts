@@ -67,6 +67,12 @@ export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 // wire field keeps its decoding default below.
 const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
 
+// The flat sidebar's active list: the thread you last wrote in leads, or
+// the creation order you can rearrange by dragging.
+export const SidebarActiveThreadOrder = Schema.Literals(["recent_message", "manual"]);
+export type SidebarActiveThreadOrder = typeof SidebarActiveThreadOrder.Type;
+export const DEFAULT_SIDEBAR_ACTIVE_THREAD_ORDER: SidebarActiveThreadOrder = "recent_message";
+
 export const SidebarProjectGroupingMode = Schema.Literals([
   "repository",
   "repository_path",
@@ -484,6 +490,9 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   sidebarThreadSortOrder: SidebarThreadSortOrder.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_THREAD_SORT_ORDER)),
+  ),
+  sidebarActiveThreadOrder: SidebarActiveThreadOrder.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_ACTIVE_THREAD_ORDER)),
   ),
   sidebarThreadPreviewCount: SidebarThreadPreviewCount.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT)),
@@ -1680,6 +1689,7 @@ export const ClientSettingsPatch = Schema.Struct({
   ),
   sidebarProjectSortOrder: Schema.optionalKey(SidebarProjectSortOrder),
   sidebarThreadSortOrder: Schema.optionalKey(SidebarThreadSortOrder),
+  sidebarActiveThreadOrder: Schema.optionalKey(SidebarActiveThreadOrder),
   sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),
   timestampFormat: Schema.optionalKey(TimestampFormat),
   snapShotEnabled: Schema.optionalKey(Schema.Boolean),
