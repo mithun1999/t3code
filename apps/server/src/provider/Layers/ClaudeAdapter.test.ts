@@ -8607,6 +8607,56 @@ describe("ClaudeAdapterLive", () => {
   });
 });
 
+describe("ClaudeAdapter session fork", () => {
+  it.effect("copies a stored session for a new thread, up to a rewound resume point", () => {
+    const forkCalls: Array<Parameters<NonNullable<ClaudeAdapterLiveOptions["forkSession"]>>> = [];
+    const harness = makeHarness({
+      forkSession: async (...args) => {
+        forkCalls.push(args);
+        return { sessionId: CLAUDE_FORK_SESSION_ID };
+      },
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const targetThreadId = ThreadId.make("thread-fork-target");
+      const forked = yield* adapter.forkSession!({
+        targetThreadId,
+        resumeCursor: {
+          threadId: THREAD_ID,
+          resume: "550e8400-e29b-41d4-a716-446655440010",
+          resumeSessionAt: "assistant-2",
+          turnCount: 3,
+        },
+        cwd: "/tmp/project",
+      });
+      assert.deepEqual(forkCalls, [
+        [
+          "550e8400-e29b-41d4-a716-446655440010",
+          { dir: "/tmp/project", upToMessageId: "assistant-2" },
+        ],
+      ]);
+      assert.deepEqual(forked.resumeCursor, {
+        threadId: targetThreadId,
+        resume: CLAUDE_FORK_SESSION_ID,
+      });
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("refuses a cursor without a Claude session id", () => {
+    const harness = makeHarness({
+      forkSession: async () => ({ sessionId: CLAUDE_FORK_SESSION_ID }),
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const error = yield* adapter.forkSession!({
+        targetThreadId: ThreadId.make("thread-fork-target"),
+        resumeCursor: {},
+      }).pipe(Effect.flip);
+      assert.match(error.message, /session id is unavailable/);
+    }).pipe(Effect.provide(harness.layer));
+  });
+});
+
 describe("ClaudeAdapter file rewind", () => {
   const ORIGINAL = CLAUDE_ORIGINAL_SESSION_ID;
   const FORK = CLAUDE_FORK_SESSION_ID;

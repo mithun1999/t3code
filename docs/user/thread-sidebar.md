@@ -25,6 +25,19 @@ in a new thread's model picker to add or remove them. A regular click returns to
 single model. Choose a base branch and send. Each selection starts a separate thread
 and worktree while you stay in the new thread composer. This requires a Git project.
 
+## Fork a thread
+
+Choose **Fork thread** from a thread's menu, in the sidebar or the chat header, to try a
+different direction without losing the original. T3 Code copies the conversation into a new
+thread named "<title> fork" in the same project, with the same model, mode, and worktree, and
+opens it at the top of the active list. The agent keeps the whole conversation, so you can
+continue as if nothing happened; the original thread is unchanged.
+
+Forking is available for Claude threads, including extra Claude accounts, and waits until the
+current turn finishes. The fork shows the conversation's messages but not the tool activity of
+earlier turns, and those earlier turns cannot be rewound from the fork. Both threads work in the
+same files, so changes made in one appear in the other.
+
 ## Pin and reorder threads
 
 Pin a thread from its menu to keep it above your active work.

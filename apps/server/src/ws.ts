@@ -160,6 +160,7 @@ import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolve
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
 import { importRecentAgentThreads } from "./project/AgentSessionImporter.ts";
+import { forkThread } from "./orchestration/forkThread.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
@@ -3538,6 +3539,27 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.agentSessionsScan, agentSessionScanner.scan, {
             "rpc.aggregate": "workspace",
           }),
+        [WS_METHODS.threadFork]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.threadFork,
+            forkThread(input).pipe(
+              Effect.provideService(
+                OrchestrationEngine.OrchestrationEngineService,
+                orchestrationEngine,
+              ),
+              Effect.provideService(
+                ProjectionSnapshotQuery.ProjectionSnapshotQuery,
+                projectionSnapshotQuery,
+              ),
+              Effect.provideService(
+                ProviderSessionDirectory.ProviderSessionDirectory,
+                providerSessionDirectory,
+              ),
+              Effect.provideService(ProviderService.ProviderService, providerService),
+              Effect.provideService(Crypto.Crypto, crypto),
+            ),
+            { "rpc.aggregate": "thread" },
+          ),
         [WS_METHODS.agentSessionsImport]: (input) =>
           observeRpcEffect(
             WS_METHODS.agentSessionsImport,

@@ -21,6 +21,7 @@ export type ThreadActionMenuId =
   | "snooze"
   | `snooze:${string}`
   | "unsnooze"
+  | "fork"
   | "rename"
   | "regenerate-title"
   | "mark-unread"
@@ -63,6 +64,8 @@ export interface ThreadActionMenuState {
     readonly snooze: boolean;
     readonly pinning: boolean;
     readonly titleRegeneration: boolean;
+    /** The thread's provider can copy its conversation into a new thread. */
+    readonly fork?: boolean;
   };
   readonly snoozePresets: ReadonlyArray<SnoozePreset>;
 }
@@ -121,7 +124,23 @@ export function buildThreadActionMenuItems(
               },
         ]
       : []),
-    { id: "rename", label: "Rename thread", icon: "pencil", separatorBefore: true },
+    ...(state.supports.fork === true
+      ? [
+          {
+            id: "fork" as const,
+            label: "Fork thread",
+            icon: "git-fork",
+            disabled: state.isRunning,
+            separatorBefore: true,
+          },
+        ]
+      : []),
+    {
+      id: "rename",
+      label: "Rename thread",
+      icon: "pencil",
+      separatorBefore: state.supports.fork !== true,
+    },
     ...(state.supports.titleRegeneration
       ? [
           {

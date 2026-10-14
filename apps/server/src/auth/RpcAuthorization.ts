@@ -128,6 +128,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.filesystemBrowse]: AuthOrchestrationReadScope,
   [WS_METHODS.agentSessionsScan]: AuthOrchestrationReadScope,
   [WS_METHODS.agentSessionsImport]: AuthOrchestrationOperateScope,
+  [WS_METHODS.threadFork]: AuthOrchestrationOperateScope,
   [WS_METHODS.filesystemScanGitRepos]: AuthOrchestrationReadScope,
   [WS_METHODS.filesystemReadWorkspaceFile]: AuthOrchestrationReadScope,
   [WS_METHODS.filesystemWriteWorkspaceFile]: AuthOrchestrationOperateScope,

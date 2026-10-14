@@ -122,6 +122,7 @@ import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogg
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 const encodeHistoryArgs = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+type ClaudeHistoryMethod = "getSessionMessages" | "forkSession";
 const decodeHistoryFork = Schema.decodeSync(
   Schema.fromJsonString(Schema.Struct({ sessionId: Schema.String })),
 );
@@ -5561,6 +5562,87 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     },
   );
 
+  // SDK history helpers read process.env. A provider with its own home runs
+  // them in a worker with that environment instead of changing the server's
+  // while other providers are running.
+  const makeHistoryCommandRunner = Effect.fn("makeHistoryCommandRunner")(function* () {
+    // The single-executable has no sibling script and no Node to run one
+    // with, so it hosts the worker as a hidden subcommand of itself.
+    const historyWorkerArguments = (yield* HostProcessIsExecutable)
+      ? ["__claude-history"]
+      : [
+          yield* path.fromFileUrl(
+            new URL(
+              import.meta.url.endsWith(".ts")
+                ? "../../claude-history-worker.ts"
+                : "./claude-history-worker.mjs",
+              import.meta.url,
+            ),
+          ),
+        ];
+    return async (method: ClaudeHistoryMethod, historySessionId: string, args: object) => {
+      // @effect-diagnostics-next-line runEffectInsideEffect:off - SDK callback runs outside the fiber; the spawn is self-contained
+      const result = await Effect.runPromise(
+        spawnAndCollect(
+          process.execPath,
+          ChildProcess.make(
+            process.execPath,
+            [...historyWorkerArguments, method, historySessionId, encodeHistoryArgs(args)],
+            { env: { ...claudeEnvironment, ELECTRON_RUN_AS_NODE: "1" } },
+          ),
+        ).pipe(
+          Effect.timeout("30 seconds"),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        ),
+      );
+      if (result.code !== 0) throw new Error(result.stderr || "Claude history command failed.");
+      return result.stdout;
+    };
+  });
+
+  const forkHistory = async (
+    sessionId: string,
+    forkOptions: { readonly dir?: string; readonly upToMessageId?: string },
+    runHistoryCommand: (
+      method: ClaudeHistoryMethod,
+      historySessionId: string,
+      args: object,
+    ) => Promise<string>,
+  ) => {
+    if (options?.forkSession) return options.forkSession(sessionId, forkOptions);
+    if (claudeEnvironment.CLAUDE_CONFIG_DIR === process.env.CLAUDE_CONFIG_DIR) {
+      return forkClaudeSessionKeepingTitle(sessionId, forkOptions);
+    }
+    return decodeHistoryFork(await runHistoryCommand("forkSession", sessionId, forkOptions));
+  };
+
+  const forkSession: NonNullable<ClaudeAdapterShape["forkSession"]> = Effect.fn("forkSession")(
+    function* (input) {
+      const state = readClaudeResumeState(input.resumeCursor);
+      if (!state?.resume) {
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "session/fork",
+          detail: "Claude session id is unavailable.",
+        });
+      }
+      const sessionId = state.resume;
+      const runHistoryCommand = yield* makeHistoryCommandRunner().pipe(
+        Effect.mapError((cause) => toRequestError(input.targetThreadId, "session/fork", cause)),
+      );
+      // A rewound session resumes at an earlier message; the copy ends there too.
+      const forkOptions = {
+        ...(input.cwd ? { dir: input.cwd } : {}),
+        ...(state.resumeSessionAt ? { upToMessageId: state.resumeSessionAt } : {}),
+      };
+      const fork = yield* Effect.tryPromise({
+        try: () => forkHistory(sessionId, forkOptions, runHistoryCommand),
+        catch: (cause) => toRequestError(input.targetThreadId, "session/fork", cause),
+      });
+      return { resumeCursor: { threadId: input.targetThreadId, resume: fork.sessionId } };
+    },
+  );
+
   const rollbackThread: ClaudeAdapterShape["rollbackThread"] = Effect.fn("rollbackThread")(
     function* (threadId, numTurns) {
       const context = yield* requireSession(threadId);
@@ -5592,46 +5674,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           detail: "Claude session id is unavailable.",
         });
       }
-      // The single-executable has no sibling script and no Node to run one
-      // with, so it hosts the worker as a hidden subcommand of itself.
-      const historyWorkerArguments = (yield* HostProcessIsExecutable)
-        ? ["__claude-history"]
-        : [
-            yield* path
-              .fromFileUrl(
-                new URL(
-                  import.meta.url.endsWith(".ts")
-                    ? "../../claude-history-worker.ts"
-                    : "./claude-history-worker.mjs",
-                  import.meta.url,
-                ),
-              )
-              .pipe(Effect.mapError((cause) => toRequestError(threadId, "thread/rollback", cause))),
-          ];
-      const runScopedHistoryCommand = async (
-        method: "getSessionMessages" | "forkSession",
+      const runHistoryCommand = yield* makeHistoryCommandRunner().pipe(
+        Effect.mapError((cause) => toRequestError(threadId, "thread/rollback", cause)),
+      );
+      const runScopedHistoryCommand = (
+        method: ClaudeHistoryMethod,
         args: object,
         historySessionId = sessionId,
-      ) => {
-        // SDK history helpers read process.env. Isolate the provider's home instead
-        // of changing the server's environment while other providers are running.
-        // @effect-diagnostics-next-line runEffectInsideEffect:off - SDK callback runs outside the fiber; the spawn is self-contained
-        const result = await Effect.runPromise(
-          spawnAndCollect(
-            process.execPath,
-            ChildProcess.make(
-              process.execPath,
-              [...historyWorkerArguments, method, historySessionId, encodeHistoryArgs(args)],
-              { env: { ...claudeEnvironment, ELECTRON_RUN_AS_NODE: "1" } },
-            ),
-          ).pipe(
-            Effect.timeout("30 seconds"),
-            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          ),
-        );
-        if (result.code !== 0) throw new Error(result.stderr || "Claude history command failed.");
-        return result.stdout;
-      };
+      ) => runHistoryCommand(method, historySessionId, args);
       const readHistory = (historySessionId: string) =>
         Effect.tryPromise({
           try: async () => {
@@ -5724,11 +5774,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
                 ...(context.session.cwd ? { dir: context.session.cwd } : {}),
                 upToMessageId: rollbackAt,
               };
-              if (options?.forkSession) return options.forkSession(sessionId, forkOptions);
-              if (claudeEnvironment.CLAUDE_CONFIG_DIR === process.env.CLAUDE_CONFIG_DIR) {
-                return forkClaudeSessionKeepingTitle(sessionId, forkOptions);
-              }
-              return decodeHistoryFork(await runScopedHistoryCommand("forkSession", forkOptions));
+              return forkHistory(sessionId, forkOptions, runHistoryCommand);
             },
             catch: (cause) => toRequestError(threadId, "thread/rollback", cause),
           })
@@ -5883,6 +5929,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     readThread,
     rollbackThread,
     rewindFiles,
+    forkSession,
     respondToRequest,
     respondToUserInput,
     stopSession,

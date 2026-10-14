@@ -12,6 +12,7 @@
  * @module ProviderService
  */
 import type {
+  ProviderDriverKind,
   ProviderInterruptTurnInput,
   ProviderInstanceId,
   ProviderRespondToRequestInput,
@@ -26,6 +27,7 @@ import type {
   MessageId,
   ThreadId,
   ProviderTurnStartResult,
+  RuntimeMode,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
@@ -38,6 +40,15 @@ import type {
   ProviderFileRewindResult,
 } from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
+
+/** A provider session copied for a new thread, ready to bind to it. */
+export interface ProviderForkedSession {
+  readonly provider: ProviderDriverKind;
+  readonly providerInstanceId: ProviderInstanceId;
+  readonly runtimeMode?: RuntimeMode;
+  readonly cwd?: string;
+  readonly resumeCursor: unknown;
+}
 
 /**
  * ProviderServiceShape - Service API for provider session and turn orchestration.
@@ -140,6 +151,15 @@ export interface ProviderServiceShape {
   readonly rewindFiles?: (
     input: ProviderFileRewindInput & { readonly threadId: ThreadId },
   ) => Effect.Effect<ProviderFileRewindResult, ProviderServiceError>;
+
+  /**
+   * Copy a thread's provider conversation into a new session for another
+   * thread, from the stored binding. Fails when the provider cannot fork.
+   */
+  readonly forkSession?: (input: {
+    readonly sourceThreadId: ThreadId;
+    readonly targetThreadId: ThreadId;
+  }) => Effect.Effect<ProviderForkedSession, ProviderServiceError>;
 
   /**
    * Upload a thread and return the provider's shareable feedback identifier.

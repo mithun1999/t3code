@@ -51,6 +51,29 @@ describe("buildThreadActionMenuItems", () => {
     ).toEqual(["rename", "mark-unread", "copy", "project-settings", "archive", "delete"]);
   });
 
+  it("offers Fork thread ahead of rename only for providers that can fork", () => {
+    expect(ids(baseState)).not.toContain("fork");
+    const items = buildThreadActionMenuItems({
+      ...baseState,
+      supports: { ...baseState.supports, fork: true },
+    });
+    const forkIndex = items.findIndex((item) => item.id === "fork");
+    expect(items[forkIndex]).toMatchObject({
+      label: "Fork thread",
+      icon: "git-fork",
+      disabled: false,
+      separatorBefore: true,
+    });
+    expect(items[forkIndex + 1]).toMatchObject({ id: "rename", separatorBefore: false });
+    expect(
+      buildThreadActionMenuItems({
+        ...baseState,
+        isRunning: true,
+        supports: { ...baseState.supports, fork: true },
+      }).find((item) => item.id === "fork")?.disabled,
+    ).toBe(true);
+  });
+
   it("groups project settings with utility actions before archive", () => {
     const items = buildThreadActionMenuItems(baseState);
     const copyIndex = items.findIndex((item) => item.id === "copy");

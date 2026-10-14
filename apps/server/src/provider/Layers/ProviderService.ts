@@ -2317,6 +2317,39 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  const forkSession: NonNullable<ProviderServiceMethod<"forkSession">> = Effect.fn("forkSession")(
+    function* (input) {
+      const binding = Option.getOrUndefined(yield* directory.getBinding(input.sourceThreadId));
+      if (!binding || binding.resumeCursor == null) {
+        return yield* toValidationError(
+          "ProviderService.forkSession",
+          "This thread has no provider conversation to fork yet.",
+        );
+      }
+      const instanceId = yield* requireBindingInstanceId("ProviderService.forkSession", binding);
+      const adapter = yield* registry.getByInstance(instanceId);
+      if (adapter.forkSession === undefined) {
+        return yield* toValidationError(
+          "ProviderService.forkSession",
+          `Forking is not available for ${adapter.provider} threads yet.`,
+        );
+      }
+      const cwd = readPersistedCwd(binding.runtimePayload);
+      const forked = yield* adapter.forkSession({
+        targetThreadId: input.targetThreadId,
+        resumeCursor: binding.resumeCursor,
+        ...(cwd ? { cwd } : {}),
+      });
+      return {
+        provider: binding.provider,
+        providerInstanceId: instanceId,
+        ...(binding.runtimeMode ? { runtimeMode: binding.runtimeMode } : {}),
+        ...(cwd ? { cwd } : {}),
+        resumeCursor: forked.resumeCursor,
+      };
+    },
+  );
+
   const uploadFeedback: ProviderServiceMethod<"uploadFeedback"> = Effect.fn("uploadFeedback")(
     function* (rawInput) {
       const input = yield* decodeInputOrValidationError({
@@ -2483,6 +2516,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     rollbackConversation,
     supportsNativeFileRewind,
     rewindFiles,
+    forkSession,
     uploadFeedback,
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each

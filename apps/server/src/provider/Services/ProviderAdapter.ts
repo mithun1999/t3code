@@ -75,6 +75,19 @@ export interface ProviderFileRewindResult {
   readonly skippedFiles?: number;
 }
 
+export interface ProviderForkSessionInput {
+  /** The new thread that will resume the copy. */
+  readonly targetThreadId: ThreadId;
+  /** The source thread's stored resume cursor. */
+  readonly resumeCursor: unknown;
+  readonly cwd?: string;
+}
+
+export interface ProviderForkSessionResult {
+  /** Resume cursor for the new thread, pointing at the copied session. */
+  readonly resumeCursor: unknown;
+}
+
 export interface ProviderThreadTurnSnapshot {
   readonly id: TurnId;
   readonly items: ReadonlyArray<unknown>;
@@ -168,6 +181,14 @@ export interface ProviderAdapterShape<TError> {
     threadId: ThreadId,
     input: ProviderFileRewindInput,
   ) => Effect.Effect<ProviderFileRewindResult, TError>;
+
+  /**
+   * Copy a stored conversation into a new provider session for a new thread,
+   * without starting either session. The source session is left untouched.
+   */
+  readonly forkSession?: (
+    input: ProviderForkSessionInput,
+  ) => Effect.Effect<ProviderForkSessionResult, TError>;
 
   /**
    * Upload a thread to the provider when the adapter supports feedback.

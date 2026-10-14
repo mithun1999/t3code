@@ -23,3 +23,9 @@ export const agentSessionImport = createEnvironmentRpcCommand(connectionAtomRunt
   label: "environment-data:agent-sessions:import",
   tag: WS_METHODS.agentSessionsImport,
 });
+
+/** Copy a thread's conversation into a new thread that continues on its own. */
+export const threadFork = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:threads:fork",
+  tag: WS_METHODS.threadFork,
+});

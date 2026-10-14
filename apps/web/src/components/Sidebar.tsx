@@ -127,6 +127,7 @@ import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
+import { readThreadSupportsFork, useForkThread } from "../hooks/useForkThread";
 import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
@@ -4086,6 +4087,7 @@ export default function Sidebar() {
     ],
   );
 
+  const forkThread = useForkThread();
   const handleThreadContextMenu = useCallback(
     (threadRef: ScopedThreadRef, position: { x: number; y: number }) => {
       void (async () => {
@@ -4159,6 +4161,10 @@ export default function Sidebar() {
                 snooze: supportsSnooze,
                 pinning: supportsPinning,
                 titleRegeneration: supportsTitleRegeneration,
+                fork: readThreadSupportsFork(
+                  thread.environmentId,
+                  thread.session?.providerInstanceId ?? thread.modelSelection.instanceId,
+                ),
               },
               snoozePresets,
             }),
@@ -4222,6 +4228,9 @@ export default function Sidebar() {
             }
             return;
           }
+          case "fork":
+            await forkThread(threadRef);
+            return;
           case "settle":
             attemptSettle(threadRef);
             return;
@@ -4361,6 +4370,7 @@ export default function Sidebar() {
       })();
     },
     [
+      forkThread,
       archiveThread,
       attemptPin,
       attemptSettle,

@@ -30,6 +30,7 @@ import {
   useProjects,
 } from "../state/entities";
 import { usePrimaryEnvironmentId } from "../state/environments";
+import { readThreadSupportsFork, useForkThread } from "./useForkThread";
 import { readLocalApi } from "../localApi";
 import {
   deriveLogicalProjectKeyFromSettings,
@@ -128,6 +129,7 @@ export function useThreadActionMenu(input: {
     onError: (error) => failureToast("Failed to copy thread ID", error),
   });
 
+  const forkThread = useForkThread();
   const openMenu = useCallback(
     (position: { x: number; y: number }) => {
       if (threadRef === null) return;
@@ -145,6 +147,10 @@ export function useThreadActionMenu(input: {
           snooze: readEnvironmentSupportsSnooze(threadRef.environmentId),
           pinning: readEnvironmentSupportsPinning(threadRef.environmentId),
           titleRegeneration: readEnvironmentSupportsTitleRegeneration(threadRef.environmentId),
+          fork: readThreadSupportsFork(
+            threadRef.environmentId,
+            thread.session?.providerInstanceId ?? thread.modelSelection.instanceId,
+          ),
         };
         const isRegeneratingTitle = thread.titleRegeneration != null;
         const snoozePresets = resolveSnoozePresets(now, timestampFormat);
@@ -193,6 +199,9 @@ export function useThreadActionMenu(input: {
           }
         };
         switch (action) {
+          case "fork":
+            await forkThread(threadRef);
+            return;
           case "project-settings": {
             if (!project) return;
             const projectKey =
@@ -343,6 +352,7 @@ export function useThreadActionMenu(input: {
       })();
     },
     [
+      forkThread,
       archiveThread,
       confirmThreadArchive,
       confirmThreadDelete,

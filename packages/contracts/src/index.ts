@@ -34,6 +34,7 @@ export * from "./project.ts";
 export * from "./workspaceIde.ts";
 export * from "./filesystem.ts";
 export * from "./agentSessions.ts";
+export * from "./threadFork.ts";
 export * from "./assets.ts";
 export * from "./review.ts";
 export * from "./browserImport.ts";

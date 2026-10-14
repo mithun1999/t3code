@@ -48,6 +48,7 @@ import {
   AgentSessionScanResult,
   AgentSessionScanError,
 } from "./agentSessions.ts";
+import { ThreadForkError, ThreadForkInput, ThreadForkResult } from "./threadFork.ts";
 import {
   AssetAccessError,
   AssetCreateUrlInput,
@@ -336,6 +337,7 @@ export const WS_METHODS = {
   filesystemBrowse: "filesystem.browse",
   agentSessionsScan: "agentSessions.scan",
   agentSessionsImport: "agentSessions.import",
+  threadFork: "threads.fork",
   filesystemScanGitRepos: "filesystem.scanGitRepos",
   filesystemReadWorkspaceFile: "filesystem.readWorkspaceFile",
   filesystemWriteWorkspaceFile: "filesystem.writeWorkspaceFile",
@@ -1101,6 +1103,12 @@ const WsAgentSessionsImportRpc = Rpc.make(WS_METHODS.agentSessionsImport, {
   ]),
 });
 
+const WsThreadForkRpc = Rpc.make(WS_METHODS.threadFork, {
+  payload: ThreadForkInput,
+  success: ThreadForkResult,
+  error: Schema.Union([ThreadForkError, EnvironmentAuthorizationError]),
+});
+
 const WsAssetsCreateUrlRpc = Rpc.make(WS_METHODS.assetsCreateUrl, {
   payload: AssetCreateUrlInput,
   success: AssetCreateUrlResult,
@@ -1621,6 +1629,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsFilesystemBrowseRpc,
   WsAgentSessionsScanRpc,
   WsAgentSessionsImportRpc,
+  WsThreadForkRpc,
   WsFilesystemScanGitReposRpc,
   WsFilesystemReadWorkspaceFileRpc,
   WsFilesystemWriteWorkspaceFileRpc,
